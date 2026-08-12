@@ -1,4 +1,6 @@
 {
+  "AMBERGRIS.description": "回复你最大生命值的[green]{HealPercent}%[/green]。在战斗中使用时，额外进行一个回合。",
+  "AMBERGRIS.title": "龙涎香",
   "ASHWATER.description": "[gold]消耗[/gold]你[gold]手牌[/gold]中的任意张牌。",
   "ASHWATER.selectionScreenPrompt": "选择任意张牌[gold]消耗[/gold]。",
   "ASHWATER.title": "灰水",
@@ -83,6 +85,7 @@
   "LUCKY_TONIC.title": "幸运补剂",
   "MAZALETHS_GIFT.description": "获得[blue]{RitualPower}[/blue]层[gold]仪式[/gold]。",
   "MAZALETHS_GIFT.title": "马萨雷斯的赠礼",
+  "MOCK_DISCARD_AND_ADD_SHIVS_POTION.title": "试用弃牌与小刀药水",
   "OROBIC_ACID.description": "往你的[gold]手牌[/gold]中加入一张随机攻击牌、一张随机技能牌和一张随机能力牌。这些牌在本回合免费。",
   "OROBIC_ACID.title": "欧洛巴斯之酸",
   "POISON_POTION.description": "给予[blue]{PoisonPower}[/blue]层[gold]中毒[/gold]。",

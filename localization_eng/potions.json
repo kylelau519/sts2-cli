@@ -1,4 +1,6 @@
 {
+  "AMBERGRIS.description": "Heal for [green]{HealPercent}%[/green] of your Max HP. If used in combat, take an extra turn.",
+  "AMBERGRIS.title": "Ambergris",
   "ASHWATER.description": "[gold]Exhaust[/gold] any number of cards in your [gold]Hand[/gold].",
   "ASHWATER.selectionScreenPrompt": "Choose any number of cards to [gold]Exhaust[/gold].",
   "ASHWATER.title": "Ashwater",
@@ -83,6 +85,8 @@
   "LUCKY_TONIC.title": "Lucky Tonic",
   "MAZALETHS_GIFT.description": "Gain [blue]{RitualPower}[/blue] [gold]Ritual[/gold].",
   "MAZALETHS_GIFT.title": "Mazaleth's Gift",
+  "MOCK_DISCARD_AND_ADD_SHIVS_POTION.description": "",
+  "MOCK_DISCARD_AND_ADD_SHIVS_POTION.title": "Mock Discard and Add Shivs Potion",
   "OROBIC_ACID.description": "Add a random Attack, Skill, and Power into your [gold]Hand[/gold]. They're free to play this turn.",
   "OROBIC_ACID.title": "Orobic Acid",
   "POISON_POTION.description": "Apply [blue]{PoisonPower}[/blue] [gold]Poison[/gold].",

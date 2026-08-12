@@ -383,7 +383,7 @@
   "VAKUU.epithet": "The First Demon",
   "VAKUU.loss": "{character} took a bad deal from [gold]Vakuu[/gold].",
   "VAKUU.talk.ANY.0-0r.ancient": "Seeking glory in the Spire are we? I have some propositions for you...",
-  "VAKUU.talk.ANY.1-0r.ancient": "143. 143 times you’ve been here.",
+  "VAKUU.talk.ANY.1-0r.ancient": "{Visits}. {Visits} {Visits:plural:time|times} you’ve been here.",
   "VAKUU.talk.ANY.2-0r.ancient": "You realize this [sine]never[/sine] ends?",
   "VAKUU.talk.DEFECT.0-0.ancient": "Broken one, let me [sine]perfect[/sine] you.",
   "VAKUU.talk.DEFECT.1-0r.ancient": "Do you find it strange that your fellow constructs want you dead?",
