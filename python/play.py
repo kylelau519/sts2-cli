@@ -92,7 +92,7 @@ def _copy_dlls(game_dir):
     os.makedirs(LIB_DIR, exist_ok=True)
     dlls = [
         "sts2.dll", "SmartFormat.dll", "SmartFormat.ZString.dll",
-        "Sentry.dll", "Steamworks.NET.dll", "MonoMod.Backports.dll",
+        "Sentry.dll", "Sentry.Godot.dll", "Steamworks.NET.dll", "MonoMod.Backports.dll",
         "MonoMod.ILHelpers.dll", "0Harmony.dll", "System.IO.Hashing.dll",
     ]
     import shutil
@@ -178,7 +178,7 @@ def ensure_setup():
         print("  ✓ Build succeeded")
 
 # Language setting (set by --lang flag)
-LANG = "zh"  # "en", "zh", or "both"
+LANG = "en"  # "en", "zh", or "both"
 
 # ─── Native save file support ───
 
@@ -2033,7 +2033,7 @@ if __name__ == "__main__":
     parser.add_argument("--ascension", type=int, default=0,
                        choices=range(0, 11), metavar="0-10",
                        help="Ascension level (0-10)")
-    parser.add_argument("--lang", type=str, default="zh",
+    parser.add_argument("--lang", type=str, default="en",
                        choices=["en", "zh", "both"],
                        help="Display language: en, zh, or both")
     parser.add_argument("--no-log", action="store_true",

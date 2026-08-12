@@ -58,6 +58,7 @@ DLLS=(
     "SmartFormat.dll"
     "SmartFormat.ZString.dll"
     "Sentry.dll"
+    "Sentry.Godot.dll"
     "Steamworks.NET.dll"
     "MonoMod.Backports.dll"
     "MonoMod.ILHelpers.dll"
@@ -194,8 +195,44 @@ foreach (var type in module.Types)
                 typeof(System.Threading.Tasks.Task).GetProperty("CompletedTask")!.GetGetMethod()!);
             il.Emit(OpCodes.Call, completedProp);
             il.Emit(OpCodes.Ret);
-            patches++;
-            Console.WriteLine($"  Patched {type.Name}.{method.Name} → Task.CompletedTask");
+        }
+    }
+}
+
+// Patch 3: LocTable.GetRawText → return key on missing instead of throwing LocException
+foreach (var type in module.Types)
+{
+    if (type.Name == "LocTable")
+    {
+        foreach (var method in type.Methods)
+        {
+            if (method.Name == "GetRawText" && method.Body != null)
+            {
+                var il = method.Body.GetILProcessor();
+                for (int i = 0; i < method.Body.Instructions.Count; i++)
+                {
+                    var instr = method.Body.Instructions[i];
+                    if (instr.OpCode == OpCodes.Ldstr && instr.Operand?.ToString() == "Key=")
+                    {
+                        var newLdarg = il.Create(OpCodes.Ldarg_1);
+                        var newRet = il.Create(OpCodes.Ret);
+
+                        il.Replace(instr, newLdarg);
+                        il.InsertAfter(newLdarg, newRet);
+
+                        var cur = newRet.Next;
+                        while (cur != null)
+                        {
+                            var next = cur.Next;
+                            il.Remove(cur);
+                            cur = next;
+                        }
+                        patches++;
+                        Console.WriteLine($"  Patched {type.Name}.{method.Name} → fallback to key");
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -219,6 +256,7 @@ rm -rf "$PATCH_DIR"
 
 echo ""
 echo "🏗️ Building..."
+set -o pipefail
 $DOTNET build src/Sts2Headless/Sts2Headless.csproj 2>&1 | tail -5
 
 echo ""
