@@ -1334,7 +1334,12 @@ public class RunSimulator
                 Log($"Buy relic {entry.Model.GetType().Name}: yielded for pending selection");
                 return DetectDecisionPoint();
             }
-            if (!task.IsCompleted) task.Wait(2000);
+            var swRelic = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted && swRelic.ElapsedMilliseconds < 3000)
+            {
+                _syncCtx.Pump();
+                Thread.Sleep(10);
+            }
             _syncCtx.Pump();
             Log($"Bought relic: {entry.Model.GetType().Name} for {entry.Cost}g");
         }
@@ -1398,7 +1403,12 @@ public class RunSimulator
                 WaitForActionExecutor();
                 return DetectDecisionPoint();
             }
-            if (!task.IsCompleted) task.Wait(2000);
+            var swCard = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted && swCard.ElapsedMilliseconds < 3000)
+            {
+                _syncCtx.Pump();
+                Thread.Sleep(10);
+            }
             _syncCtx.Pump();
             Log($"Removed card for {removal.Cost}g");
         }
@@ -1610,7 +1620,12 @@ public class RunSimulator
                     WaitForActionExecutor();
                     return DetectDecisionPoint();
                 }
-                if (!task.IsCompleted) task.Wait(2000);
+                var swRest = System.Diagnostics.Stopwatch.StartNew();
+                while (!task.IsCompleted && swRest.ElapsedMilliseconds < 3000)
+                {
+                    _syncCtx.Pump();
+                    Thread.Sleep(10);
+                }
                 _syncCtx.Pump();
             }
             catch (Exception ex)
@@ -1664,7 +1679,14 @@ public class RunSimulator
                             WaitForActionExecutor();
                             return DetectDecisionPoint();
                         }
-                        if (!task.IsCompleted) task.Wait(2000);
+                        var swEvent = System.Diagnostics.Stopwatch.StartNew();
+                        while (!task.IsCompleted && swEvent.ElapsedMilliseconds < 3000)
+                        {
+                            _syncCtx.Pump();
+                            Thread.Sleep(10);
+                        }
+                        _syncCtx.Pump();
+                        WaitForActionExecutor();
                         _syncCtx.Pump();
                     }
                     catch (Exception ex) { Log($"Event choose: {ex.Message}"); }
@@ -3172,6 +3194,7 @@ public class RunSimulator
         // Initialize net ID serialization cache (needed for combat actions)
         try
         {
+            MegaCrit.Sts2.Core.Modding.AssemblyInfo.Init();
             ModelIdSerializationCache.Init();
             Console.Error.WriteLine("[INFO] ModelIdSerializationCache initialized");
         }

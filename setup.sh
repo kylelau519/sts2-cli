@@ -169,6 +169,8 @@ foreach (var type in module.Types)
                     {
                         var il = method.Body.GetILProcessor();
                         il.Body.Instructions.Clear();
+                        method.Body.ExceptionHandlers.Clear();
+                        method.Body.Variables.Clear();
                         il.Emit(OpCodes.Ldc_I4_1);
                         il.Emit(OpCodes.Ret);
                         patches++;
@@ -189,6 +191,8 @@ foreach (var type in module.Types)
         {
             var il = method.Body.GetILProcessor();
             il.Body.Instructions.Clear();
+            method.Body.ExceptionHandlers.Clear();
+            method.Body.Variables.Clear();
             // return Task.CompletedTask
             var taskType = module.ImportReference(typeof(System.Threading.Tasks.Task));
             var completedProp = module.ImportReference(
@@ -248,6 +252,8 @@ foreach (var type in module.Types)
             {
                 var il = method.Body.GetILProcessor();
                 il.Body.Instructions.Clear();
+                method.Body.ExceptionHandlers.Clear();
+                method.Body.Variables.Clear();
                 var completedProp = module.ImportReference(
                     typeof(System.Threading.Tasks.Task).GetProperty("CompletedTask")!.GetGetMethod()!);
                 il.Emit(OpCodes.Call, completedProp);
@@ -270,10 +276,73 @@ foreach (var type in module.Types)
             {
                 var il = method.Body.GetILProcessor();
                 il.Body.Instructions.Clear();
+                method.Body.ExceptionHandlers.Clear();
+                method.Body.Variables.Clear();
                 il.Emit(OpCodes.Ldnull);
                 il.Emit(OpCodes.Ret);
                 patches++;
                 Console.WriteLine($"  Patched {type.Name}.{method.Name} → null");
+            }
+        }
+    }
+}
+
+// Patch 6: TweenHelper.AwaitFinished* → return completed tasks instantly in headless mode
+var fromResultGeneric = System.Linq.Enumerable.First(typeof(System.Threading.Tasks.Task).GetMethods(), m => m.Name == "FromResult" && m.IsGenericMethodDefinition);
+var fromResultBoolMethod = module.ImportReference(fromResultGeneric.MakeGenericMethod(typeof(bool)));
+var completedTaskGet = module.ImportReference(typeof(System.Threading.Tasks.Task).GetProperty("CompletedTask")!.GetGetMethod()!);
+
+foreach (var type in module.Types)
+{
+    if (type.Name.Contains("TweenHelper"))
+    {
+        foreach (var method in type.Methods)
+        {
+            if (method.Name.StartsWith("AwaitFinished") && method.Body != null)
+            {
+                var il = method.Body.GetILProcessor();
+                il.Body.Instructions.Clear();
+                method.Body.ExceptionHandlers.Clear();
+                method.Body.Variables.Clear();
+                if (method.ReturnType.Name.Contains("Boolean"))
+                {
+                    il.Emit(OpCodes.Ldc_I4_1);
+                    il.Emit(OpCodes.Call, fromResultBoolMethod);
+                }
+                else
+                {
+                    il.Emit(OpCodes.Call, completedTaskGet);
+                }
+                il.Emit(OpCodes.Ret);
+                patches++;
+                Console.WriteLine($"  Patched {type.Name}.{method.Name} → instant Task completion");
+            }
+        }
+    }
+}
+
+// Patch 7: CardPileCmd.GetTweenForCardsChangingPiles → return (null, false) in headless mode
+foreach (var type in module.Types)
+{
+    if (type.Name == "CardPileCmd")
+    {
+        foreach (var method in type.Methods)
+        {
+            if (method.Name == "GetTweenForCardsChangingPiles" && method.Body != null)
+            {
+                var il = method.Body.GetILProcessor();
+                il.Body.Instructions.Clear();
+                method.Body.ExceptionHandlers.Clear();
+                method.Body.Variables.Clear();
+                var tupleType = method.ReturnType;
+                var local = new VariableDefinition(tupleType);
+                method.Body.Variables.Add(local);
+                il.Emit(OpCodes.Ldloca_S, local);
+                il.Emit(OpCodes.Initobj, tupleType);
+                il.Emit(OpCodes.Ldloc, local);
+                il.Emit(OpCodes.Ret);
+                patches++;
+                Console.WriteLine($"  Patched {type.Name}.{method.Name} → return (null, false)");
             }
         }
     }
