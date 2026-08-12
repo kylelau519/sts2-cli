@@ -93,7 +93,9 @@ class Program
             }
             catch (Exception ex)
             {
-                result = new Dictionary<string, object?> { ["type"] = "error", ["message"] = $"{ex.GetType().Name}: {ex.Message}" };
+                Console.Error.WriteLine($"[ERROR] Exception during command execution:\n{ex}");
+                var msg = ex.InnerException != null ? $"{ex.GetType().Name}: {ex.Message} --> {ex.InnerException.Message}" : $"{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}";
+                result = new Dictionary<string, object?> { ["type"] = "error", ["message"] = msg };
             }
 
             if (result != null)

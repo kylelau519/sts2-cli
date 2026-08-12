@@ -249,6 +249,8 @@ public class RunSimulator
                 ascensionLevel: ascension,
                 seed: seedStr
             );
+            typeof(RunState).GetField("<UnlockState>k__BackingField", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.SetValue(_runState, MegaCrit.Sts2.Core.Unlocks.UnlockState.all);
 
             // Set up RunManager with test mode
             var netService = new NetSingleplayerGameService();
@@ -517,7 +519,7 @@ public class RunSimulator
             Log($"RunState created, players={_runState.Players?.Count}");
 
             var netService = new NetSingleplayerGameService();
-            RunManager.Instance.SetUpSavedSinglePlayer(_runState, save);
+            RunManager.Instance.SetUpSavedSingleplayer(_runState, save);
             LocalContext.NetId = netService.NetId;
 
             CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
@@ -3074,6 +3076,18 @@ public class RunSimulator
 
         TestMode.IsOn = true;
 
+        // Initialize ModManager state for headless/test mode
+        try
+        {
+            var stateProp = typeof(MegaCrit.Sts2.Core.Modding.ModManager).GetProperty("State",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            stateProp?.SetValue(null, MegaCrit.Sts2.Core.Modding.ModManagerState.Skipped);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[WARN] ModManager init: {ex.Message}");
+        }
+
         // Install inline sync context on main thread
         SynchronizationContext.SetSynchronizationContext(_syncCtx);
 
@@ -3138,6 +3152,22 @@ public class RunSimulator
             }
         }
         Console.Error.WriteLine($"[INFO] ModelDb: {registered} registered, {failed} failed out of {subtypes.Count}");
+
+        // Ensure UnlockState.all has all epoch IDs unlocked so Neow options generate properly
+        try
+        {
+            var unlockedEpochsField = typeof(MegaCrit.Sts2.Core.Unlocks.UnlockState).GetField("_unlockedEpochIds",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var epochsHashSet = unlockedEpochsField?.GetValue(MegaCrit.Sts2.Core.Unlocks.UnlockState.all) as HashSet<string>;
+            if (epochsHashSet != null)
+            {
+                foreach (var epochId in MegaCrit.Sts2.Core.Timeline.EpochModel.AllEpochIds)
+                {
+                    epochsHashSet.Add(epochId);
+                }
+            }
+        }
+        catch { }
 
         // Initialize net ID serialization cache (needed for combat actions)
         try
@@ -3463,7 +3493,7 @@ public class RunSimulator
             // Load REAL localization data from localization_eng/ JSON files
             var tablesField = typeof(LocManager).GetField("_tables",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            var tables = new Dictionary<string, LocTable>();
+            var tables = new Dictionary<string, LocTable>(StringComparer.OrdinalIgnoreCase);
 
             var locDir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "localization_eng");
             if (Directory.Exists(locDir))
@@ -3518,50 +3548,30 @@ public class RunSimulator
             {
                 var sfField = typeof(LocManager).GetField("_smartFormatter",
                     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
-                // Dump ALL fields (instance + static)
-                foreach (var f in typeof(LocManager).GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public))
-                    Console.Error.WriteLine($"[DEBUG] LocManager {(f.IsStatic?"static":"inst")} field: {f.Name} ({f.FieldType.Name})");
-                Console.Error.WriteLine($"[DEBUG] sfField: {sfField?.Name ?? "null"} type: {sfField?.FieldType?.Name ?? "null"}");
                 if (sfField != null)
                 {
                     try
                     {
-                        // List constructors to find the right one
                         var ctors = sfField.FieldType.GetConstructors(
                             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                        Console.Error.WriteLine($"[DEBUG] SmartFormatter has {ctors.Length} constructors:");
-                        foreach (var ctor in ctors)
-                        {
-                            var ps = ctor.GetParameters();
-                            Console.Error.WriteLine($"  ({string.Join(", ", ps.Select(p => $"{p.ParameterType.Name} {p.Name}"))})");
-                        }
-                        // Try the one with fewest params
                         var bestCtor = ctors.OrderBy(c => c.GetParameters().Length).First();
                         var args2 = bestCtor.GetParameters().Select(p =>
                             p.HasDefaultValue ? p.DefaultValue :
                             p.ParameterType.IsValueType ? Activator.CreateInstance(p.ParameterType) : null
                         ).ToArray();
                         var sf = bestCtor.Invoke(args2);
+                        sfField.SetValue(null, sf);
+
                         // Register extensions using the game's own LoadLocFormatters logic
-                        // Call it via reflection on LocManager instance
                         try
                         {
                             var loadMethod = typeof(LocManager).GetMethod("LoadLocFormatters",
                                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                            if (loadMethod != null)
-                            {
-                                loadMethod.Invoke(instance, null);
-                                Console.Error.WriteLine("[INFO] SmartFormatter initialized via LoadLocFormatters");
-                            }
-                            else
-                            {
-                                sfField.SetValue(null, sf);
-                                Console.Error.WriteLine("[INFO] SmartFormatter set (no LoadLocFormatters found)");
-                            }
+                            loadMethod?.Invoke(instance, null);
+                            Console.Error.WriteLine("[INFO] SmartFormatter initialized via LoadLocFormatters");
                         }
                         catch (Exception lfEx)
                         {
-                            sfField.SetValue(null, sf);
                             Console.Error.WriteLine($"[WARN] LoadLocFormatters failed: {lfEx.InnerException?.Message ?? lfEx.Message}");
                         }
                     }
@@ -3733,8 +3743,7 @@ public class RunSimulator
         {
             try
             {
-                await CreatureCmd.Damage(ctx, play.Target!, card.DynamicVars.Damage.BaseValue,
-                    MegaCrit.Sts2.Core.ValueProps.ValueProp.Move, card);
+                await CreatureCmd.Damage(ctx, play.Target!, card.DynamicVars.Damage, card, play);
                 await PowerCmd.Apply<WeakPower>(ctx, play.Target!, card.DynamicVars["WeakPower"].BaseValue,
                     card.Owner.Creature, card, false);
             }
