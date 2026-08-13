@@ -15,9 +15,6 @@ Expected: `Completed: 5/5` for every character.
 
 ## Localization
 
-- Always use the game's official Chinese translations (from `localization_zhs/`)
-- Never invent translations — look them up
-- All user-facing strings must go through `t(en, zh)` for bilingual support
 - Template variables like `{Damage}`, `{Block}`, `{MaxHp}` must be resolved to actual values before display
 
 ## Build
@@ -34,7 +31,7 @@ Expected: `Completed: 5/5` for every character.
 - `python/play.py` — interactive terminal player
 - `python/play_full_run.py` — batch testing tool
 - `lib/` — game DLLs (not in repo, copied by setup.sh)
-- `localization_eng/`, `localization_zhs/` — bilingual loc data
+- `localization_eng/` — English localization data
 
 ## Conventions
 

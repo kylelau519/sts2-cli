@@ -88,18 +88,16 @@ internal class InlineSynchronizationContext : SynchronizationContext
 }
 
 /// <summary>
-/// Bilingual localization lookup — loads eng/zhs JSON files for display names.
+/// English localization lookup — loads eng JSON files for display names.
 /// </summary>
 internal class LocLookup
 {
     private readonly Dictionary<string, Dictionary<string, string>> _eng = new();
-    private readonly Dictionary<string, Dictionary<string, string>> _zhs = new();
 
     public LocLookup()
     {
         var baseDir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..");
         Load(Path.Combine(baseDir, "localization_eng"), _eng);
-        Load(Path.Combine(baseDir, "localization_zhs"), _zhs);
     }
 
     private static void Load(string dir, Dictionary<string, Dictionary<string, string>> target)
@@ -117,17 +115,14 @@ internal class LocLookup
         }
     }
 
-    /// <summary>Get bilingual name: "English / 中文" or just the key if not found.</summary>
+    /// <summary>Get English name or just the key if not found.</summary>
     public string Name(string table, string key)
     {
         var en = _eng.GetValueOrDefault(table)?.GetValueOrDefault(key);
-        var zh = _zhs.GetValueOrDefault(table)?.GetValueOrDefault(key);
-        if (en != null && zh != null && en != zh) return $"{en} / {zh}";
-        return en ?? zh ?? key;
+        return en ?? key;
     }
 
     public string? En(string table, string key) => _eng.GetValueOrDefault(table)?.GetValueOrDefault(key);
-    public string? Zh(string table, string key) => _zhs.GetValueOrDefault(table)?.GetValueOrDefault(key);
 
     /// <summary>Strip BBCode tags like [gold], [/blue], [b], [sine], etc.</summary>
     private static string StripBBCode(string text)
@@ -135,17 +130,9 @@ internal class LocLookup
         return System.Text.RegularExpressions.Regex.Replace(text, @"\[/?[a-zA-Z_][a-zA-Z0-9_=]*\]", "");
     }
 
-    /// <summary>Language for JSON output: "en" or "zh". Default: "en".</summary>
-    public string Lang { get; set; } = "en";
-
-    /// <summary>Return localized string for JSON output based on Lang setting.</summary>
+    /// <summary>Return localized string for JSON output.</summary>
     public string Bilingual(string table, string key)
     {
-        if (Lang == "zh")
-        {
-            var zh = _zhs.GetValueOrDefault(table)?.GetValueOrDefault(key);
-            if (zh != null) return StripBBCode(zh);
-        }
         var en = _eng.GetValueOrDefault(table)?.GetValueOrDefault(key) ?? key;
         return StripBBCode(en);
     }
@@ -179,14 +166,6 @@ internal class LocLookup
     /// <summary>Resolve a full loc key like "TABLE.KEY.SUB" by searching all tables.</summary>
     public string BilingualFromKey(string locKey)
     {
-        if (Lang == "zh")
-        {
-            foreach (var tableName in _zhs.Keys)
-            {
-                var zh = _zhs.GetValueOrDefault(tableName)?.GetValueOrDefault(locKey);
-                if (zh != null) return zh;
-            }
-        }
         foreach (var tableName in _eng.Keys)
         {
             var en = _eng.GetValueOrDefault(tableName)?.GetValueOrDefault(locKey);
@@ -229,11 +208,10 @@ public class RunSimulator
     private IReadOnlyList<IReadOnlyList<CardModel>>? _pendingBundles;
     private TaskCompletionSource<IEnumerable<CardModel>>? _pendingBundleTcs;
 
-    public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null, string lang = "en")
+    public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null)
     {
         try
         {
-            _loc.Lang = lang;
             EnsureModelDbInitialized();
 
             var player = CreatePlayer(character);
@@ -495,11 +473,10 @@ public class RunSimulator
     }
 
     // ─── Game actions ───
-    public Dictionary<string, object?> LoadSave(string saveJson, string lang = "en")
+    public Dictionary<string, object?> LoadSave(string saveJson)
     {
         try
         {
-            _loc.Lang = lang;
             EnsureModelDbInitialized();
 
             Log("Loading save file...");

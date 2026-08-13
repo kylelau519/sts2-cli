@@ -119,8 +119,7 @@ class Program
                 return sim.StartRun(
                     cmd.TryGetProperty("character", out var ch) ? ch.GetString() ?? "Ironclad" : "Ironclad",
                     cmd.TryGetProperty("ascension", out var asc) ? asc.GetInt32() : 0,
-                    cmd.TryGetProperty("seed", out var s) ? s.GetString() : null,
-                    cmd.TryGetProperty("lang", out var lang) ? lang.GetString() ?? "en" : "en"
+                    cmd.TryGetProperty("seed", out var s) ? s.GetString() : null
                 );
 
             case "action":
@@ -157,8 +156,7 @@ class Program
                 }
                 if (saveJson == null)
                     return new Dictionary<string, object?> { ["type"] = "error", ["message"] = "Provide 'path' or 'json' for load_save" };
-                var loadLang = cmd.TryGetProperty("lang", out var le) ? (le.GetString() ?? "en") : "en";
-                return sim.LoadSave(saveJson, loadLang);
+                return sim.LoadSave(saveJson);
             }
             case "get_map":
                 return sim.GetFullMap();
