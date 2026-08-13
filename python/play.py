@@ -168,7 +168,7 @@ class MainLoop:
         self.proc = subprocess.Popen(
             [dotnet, "run", "--no-build", "--project", str(PROJECT)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, bufsize=1,
+            stderr=subprocess.DEVNULL, text=True, bufsize=1,
         )
 
         get_input._send = self.send
