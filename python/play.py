@@ -635,15 +635,7 @@ def show_player(p, show_deck=False):
         cards = p.get("deck", [])
         if cards:
             print(f"  {c(t('Deck:','牌组:'), 'bold')}")
-            for cd in cards:
-                up = c("+", "green") if cd.get("upgraded") else ""
-                ctype_zh = CARD_TYPE_ZH.get(cd.get("type",""), cd.get("type",""))
-                _pre, suf = split_card_keywords(cd.get("keywords"))
-                suf_part = format_card_suffix_keywords(suf)
-                rare = cd.get("rarity")
-                rare_part = f" {c(t(rare, RARITY_ZH.get(rare, rare)), 'dim')}" if rare else ""
-                print(f"    {n(cd['name'])}{up} ({cd.get('cost','?')}) {c(t(cd.get('type',''), ctype_zh), 'dim')}{rare_part}{suf_part}")
-                print_card_detail_extension(cd, indent="      ")
+            print_cards_grid(cards, show_index=False, inline_stats=False, show_playable=False)
 
 def show_combat(state):
     rnd = state.get("round", 0)
@@ -763,33 +755,8 @@ def show_combat(state):
 
     print()
     hand = state.get("hand", [])
-    for card in hand:
-        cost = card.get("cost", 0)
-        playable = card.get("can_play", False)
-        ctype = card.get("type", "?")
-        target = card.get("target_type", "")
-
-        type_color = {"Attack": "red", "Skill": "blue", "Power": "magenta", "Status": "dim", "Curse": "dim"}.get(ctype, "reset")
-        mark = c("●", "green") if playable else c("○", "dim")
-        star_cost = card.get("star_cost", 0)
-        cost_str = c(str(cost), "cyan")
-        if star_cost > 0:
-            cost_str += f"+{c(f'{star_cost}⭐', 'yellow')}"
-
-        # Damage/block inline on title row; suffix keywords (e.g. 消耗) at end of title row
-        stat_str = combat_hand_inline_stat_str(
-            card.get("stats") or {}, card=card, osty=state.get("osty")
-        )
-
-        _pre, suf = split_card_keywords(card.get("keywords"))
-        suf_part = format_card_suffix_keywords(suf)
-        ench = card.get("enchantment")
-        ench_str = f" {c(n(ench), 'magenta')}" if ench else ""
-
-        print(f"  {mark} [{card['index']}] {c(n(card['name']), type_color)}{ench_str} ({cost_str}) {stat_str}{suf_part}"
-              + (f"  {c('→','yellow')}" if target == "AnyEnemy" else ""))
-
-        print_card_detail_extension(card, indent="      ")
+    if hand:
+        print_cards_grid(hand, show_index=True, inline_stats=True, show_playable=True, osty=state.get("osty"))
 
 def show_map(state, send_fn=None):
     """Show map at map_select. Fetches full map if send_fn available."""
@@ -810,7 +777,9 @@ def show_map(state, send_fn=None):
     act_name = n(ctx.get("act_name", "?"))
     floor = ctx.get("floor", "?")
     print(f"\n{'═' * 60}")
-    print(f"  {c(f'{act_name}', 'bold')} {t('Floor','层')} {floor}")
+    boss_name = ctx.get("boss", {}).get("name")
+    boss_str = f" — {c(n(boss_name), 'red')}" if boss_name else ""
+    print(f"  {c(f'{act_name}', 'bold')} — {t('Floor','层')} {floor}{boss_str}")
     show_player(state.get("player", {}))
     print()
     type_icons = {
@@ -832,7 +801,7 @@ def _format_upgrade_preview(stats, aug, current_cost=None):
     # Cost change
     aug_cost = aug.get("cost")
     if current_cost is not None and aug_cost is not None and aug_cost != current_cost:
-        parts.append(c(f"{t('cost','费用')} {current_cost}→{aug_cost}", "green"))
+        parts.append(c(f"{t('cost','费用')} {current_cost}→{aug_cost}", "dim"))
     # Compare all stats, show changed values with readable names
     all_keys = set(list(stats.keys()) + list(aug_stats.keys()))
     for k in sorted(all_keys):
@@ -840,16 +809,16 @@ def _format_upgrade_preview(stats, aug, current_cost=None):
         new_val = aug_stats.get(k, old)
         if new_val != old:
             if k == "damage":
-                parts.append(c(f"{t('dmg','伤害')} {old}→{new_val}", "red"))
+                parts.append(c(f"{t('dmg','伤害')} {old}→{new_val}", "dim"))
             elif k == "block":
-                parts.append(c(f"{t('blk','格挡')} {old}→{new_val}", "blue"))
+                parts.append(c(f"{t('blk','格挡')} {old}→{new_val}", "dim"))
             else:
-                parts.append(c(f"{old}→{new_val}", "green"))
+                parts.append(c(f"{old}→{new_val}", "dim"))
     # Keyword changes (e.g., Discovery removes Exhaust)
     for kw in (aug.get("removed_keywords") or []):
-        parts.append(c(f"-{_card_kw_label(kw)}", "green"))
+        parts.append(c(f"-{_card_kw_label(kw)}", "dim"))
     for kw in (aug.get("added_keywords") or []):
-        parts.append(c(f"+{_card_kw_label(kw)}", "yellow"))
+        parts.append(c(f"+{_card_kw_label(kw)}", "dim"))
     return parts
 
 
@@ -857,11 +826,110 @@ def print_card_detail_extension(card, indent="      "):
     """Description (with [prefix/keywords]) + upgrade preview; indent matches title row spacing."""
     for line in card_description_display_lines(card):
         if line:
-            print(f"{indent}{c(line, 'dim')}")
+            print(f"{indent}{line}")
     stats = card.get("stats") or {}
     aug_parts = _format_upgrade_preview(stats, card.get("after_upgrade"), card.get("cost"))
     if aug_parts:
-        print(f"{indent}{c(t('upgrade:','升级:'), 'green')} {', '.join(aug_parts)}")
+        print(f"{indent}{c(t('upgrade:','升级:'), 'dim')} {', '.join(aug_parts)}")
+
+def print_cards_grid(cards, show_index=False, inline_stats=False, show_playable=False, osty=None, is_shop=False, player_gold=0):
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.columns import Columns
+        from rich.text import Text
+        use_rich = True
+    except ImportError:
+        use_rich = False
+
+    if not use_rich:
+        for cd in cards:
+            idx = cd.get("index")
+            idx_str = f"[{idx}] " if show_index and idx is not None else ""
+            playable = cd.get("can_play", True)
+            mark = c("● ", "green") if show_playable and playable else (c("○ ", "dim") if show_playable else "")
+            type_color = {"Attack": "red", "Skill": "blue", "Power": "magenta", "Status": "dim", "Curse": "dim"}.get(cd.get("type", ""), "reset")
+            up = c("+", "green") if cd.get("upgraded") else ""
+            name = n(cd.get("name", "?"))
+            ench = cd.get("enchantment")
+            ench_str = f" {c(n(ench), 'magenta')}" if ench else ""
+            cost = cd.get("cost", "?")
+            star_cost = cd.get("star_cost", 0)
+            cost_str = c(str(cost), "cyan") + (f"+{c(f'{star_cost}⭐', 'yellow')}" if star_cost > 0 else "")
+            ctype_zh = CARD_TYPE_ZH.get(cd.get("type", ""), cd.get("type", ""))
+            rare = cd.get("rarity")
+            rare_part = f" {c(t(rare, RARITY_ZH.get(rare, rare)), 'dim')}" if rare else ""
+            _pre, suf = split_card_keywords(cd.get("keywords"))
+            suf_part = format_card_suffix_keywords(suf)
+            stat_str = ""
+            if inline_stats:
+                stat_str = combat_hand_inline_stat_str(cd.get("stats") or {}, card=cd, osty=osty)
+                if stat_str: stat_str = " " + stat_str
+            
+            shop_str = ""
+            if is_shop:
+                price = cd.get("shop_price", 0)
+                affordable = c(str(price), "green") if price <= player_gold else c(str(price), "red")
+                sale = c(t(" SALE", " 打折"), "yellow") if cd.get("on_sale") else ""
+                shop_str = f" — {affordable}{t('g','金')}{sale}"
+
+            target = cd.get("target_type", "")
+            print(f"  {mark}{idx_str}{c(name, type_color)}{up}{ench_str} ({cost_str}) {c(t(cd.get('type',''), ctype_zh), type_color)}{rare_part}{stat_str}{suf_part}{shop_str}"
+                  + (f"  {c('→','yellow')}" if target == "AnyEnemy" else ""))
+            print_card_detail_extension(cd, indent="      ")
+        return
+
+    c_console = Console()
+    panels = []
+    for cd in cards:
+        idx = cd.get("index")
+        idx_str = f"[{idx}] " if show_index and idx is not None else ""
+        playable = cd.get("can_play", True)
+        mark = c("● ", "green") if show_playable and playable else (c("○ ", "dim") if show_playable else "")
+        type_color = {"Attack": "red", "Skill": "blue", "Power": "magenta", "Status": "dim", "Curse": "dim"}.get(cd.get("type", ""), "reset")
+        up = c("+", "green") if cd.get("upgraded") else ""
+        name = n(cd.get("name", "?"))
+        ench = cd.get("enchantment")
+        ench_str = f" {c(n(ench), 'magenta')}" if ench else ""
+        title_str = f"{mark}{idx_str}{c(name, type_color)}{ench_str}{up}"
+        
+        body_lines = []
+        cost = cd.get("cost", "?")
+        star_cost = cd.get("star_cost", 0)
+        cost_str = c(str(cost), "cyan") + (f"+{c(f'{star_cost}⭐', 'yellow')}" if star_cost > 0 else "")
+        ctype_zh = CARD_TYPE_ZH.get(cd.get("type",""), cd.get("type",""))
+        rare = cd.get("rarity")
+        rare_part = f" {c(t(rare, RARITY_ZH.get(rare, rare)), 'dim')}" if rare else ""
+        _pre, suf = split_card_keywords(cd.get("keywords"))
+        suf_part = format_card_suffix_keywords(suf)
+        stat_str = ""
+        if inline_stats:
+            stat_str = combat_hand_inline_stat_str(cd.get("stats") or {}, card=cd, osty=osty)
+            if stat_str: stat_str = " " + stat_str
+                
+        body_lines.append(f"({cost_str}) {c(t(cd.get('type',''), ctype_zh), type_color)}{rare_part}{stat_str}{suf_part}")
+        
+        for line in card_description_display_lines(cd):
+            if line: body_lines.append(line)
+        
+        stats = cd.get("stats") or {}
+        aug_parts = _format_upgrade_preview(stats, cd.get("after_upgrade"), cd.get("cost"))
+        if aug_parts:
+            body_lines.append(f"{c(t('upgrade:','升级:'), 'dim')} {', '.join(aug_parts)}")
+            
+        target = cd.get("target_type", "")
+        if target == "AnyEnemy":
+             body_lines.append(c('→ Any Enemy', 'yellow'))
+
+        if is_shop:
+            price = cd.get("shop_price", 0)
+            affordable = c(str(price), "green") if price <= player_gold else c(str(price), "red")
+            sale = c(t(" SALE", " 打折"), "yellow") if cd.get("on_sale") else ""
+            body_lines.append(f"💰 {affordable}{t('g', '金')}{sale}")
+             
+        panels.append(Panel(Text.from_ansi("\n".join(body_lines)), title=Text.from_ansi(title_str), width=35))
+        
+    c_console.print(Columns(panels))
 
 
 def card_pick_quantity_hint(mn, mx):
@@ -884,18 +952,8 @@ def show_card_reward(state):
     show_player(state.get("player", {}))
     print()
     cards = state.get("cards", [])
-    for card in cards:
-        ctype = card.get("type", "?")
-        rarity = card.get("rarity", "Common")
-        cost = card.get("cost", "?")
-        type_color = {"Attack": "red", "Skill": "blue", "Power": "magenta"}.get(ctype, "reset")
-        rarity_zh = RARITY_ZH.get(rarity, rarity)
-        rarity_label = t(rarity, rarity_zh)
-        rarity_color = {"Rare": "yellow", "Uncommon": "cyan"}.get(rarity, "dim")
-        _pre, suf = split_card_keywords(card.get("keywords"))
-        suf_part = format_card_suffix_keywords(suf)
-        print(f"  [{card['index']}] {c(n(card['name']), type_color)} ({cost}) {c(rarity_label, rarity_color)}{suf_part}")
-        print_card_detail_extension(card, indent="      ")
+    if cards:
+        print_cards_grid(cards, show_index=True, inline_stats=False, show_playable=False)
 
     print()
     if cards:
@@ -911,17 +969,15 @@ def show_shop(state):
     gold = state.get("player", {}).get("gold", 0)
 
     print(f"\n  {c(t('Cards:','卡牌:'), 'bold')}")
+    shop_cards = []
     for card in state.get("cards", []):
         if not card.get("is_stocked"): continue
-        cost = card.get("cost", 0)
-        affordable = c(str(cost), "green") if cost <= gold else c(str(cost), "red")
-        sale = c(t(" SALE"," 打折"), "yellow") if card.get("on_sale") else ""
-        ctype_zh = CARD_TYPE_ZH.get(card.get("type",""), card.get("type",""))
-        cc = card.get("card_cost", "?")
-        _pre, suf = split_card_keywords(card.get("keywords"))
-        suf_part = format_card_suffix_keywords(suf)
-        print(f"  [{card['index']}] {n(card['name'])} ({cc}) {c(t(card.get('type','?'), ctype_zh), 'dim')}{suf_part} — {affordable}{t('g','金')}{sale}")
-        print_card_detail_extension(card, indent="      ")
+        cc = dict(card)
+        cc["shop_price"] = cc["cost"]
+        cc["cost"] = cc.get("card_cost", "?")
+        shop_cards.append(cc)
+    if shop_cards:
+        print_cards_grid(shop_cards, show_index=True, inline_stats=False, show_playable=False, is_shop=True, player_gold=gold)
 
     print(f"\n  {c(t('Relics:','遗物:'), 'bold')}")
     for r in state.get("relics", []):
@@ -1099,7 +1155,11 @@ def _render_map(map_data, choice_set=None, choice_indices=None):
 
     width = W * total_cols + 6
     print(f"\n{'═' * width}")
-    print(f"  {c(act, 'bold')} — {t('Floor','层')} {floor_n}")
+    boss_name = ctx.get("boss", {}).get("name")
+    if not boss_name:
+        boss_name = map_data.get("boss", {}).get("name")
+    boss_str = f" — {c(n(boss_name), 'red')}" if boss_name else ""
+    print(f"  {c(act, 'bold')} — {t('Floor','层')} {floor_n}{boss_str}")
     # Show current position if it's not on the map grid (e.g., starting row 0)
     if cur and cur.get("row", -1) not in row_numbers:
         print(f"  {c(t('You are at the start','你在起点'), 'green')}")
@@ -1787,11 +1847,8 @@ def play(character="Ironclad", seed=None, auto=False, ascension=0, log=True,
                 for b in bundles:
                     bidx = b["index"]
                     print(f"  {c(f'Pack [{bidx}]:', 'yellow')}")
-                    for cd in b.get("cards", []):
-                        _p, sf = split_card_keywords(cd.get("keywords"))
-                        sp = format_card_suffix_keywords(sf)
-                        print(f"    {n(cd['name'])} ({cd.get('cost','?')}) {c(cd.get('type',''), 'dim')}{sp}")
-                        print_card_detail_extension(cd, indent="      ")
+                    if b.get("cards"):
+                        print_cards_grid(b.get("cards"), show_index=False, inline_stats=False, show_playable=False)
                 valid = {str(b["index"]): b for b in bundles}
                 if auto:
                     choice = "0"
@@ -1811,16 +1868,8 @@ def play(character="Ironclad", seed=None, auto=False, ascension=0, log=True,
                 show_player(state.get("player", {}))
                 print()
                 cards = state.get("cards", [])
-                for cd in cards:
-                    up = c("+", "green") if cd.get("upgraded") else ""
-                    ctype_zh = CARD_TYPE_ZH.get(cd.get("type", ""), cd.get("type", ""))
-                    ctype_label = t(cd.get("type", ""), ctype_zh)
-                    rare = cd.get("rarity")
-                    rare_part = f" {c(t(rare, RARITY_ZH.get(rare, rare)), 'dim')}" if rare else ""
-                    _p, sf = split_card_keywords(cd.get("keywords"))
-                    sp = format_card_suffix_keywords(sf)
-                    print(f"  [{cd['index']}] {n(cd['name'])}{up} ({cd.get('cost','?')}) {c(ctype_label, 'dim')}{rare_part}{sp}")
-                    print_card_detail_extension(cd, indent="      ")
+                if cards:
+                    print_cards_grid(cards, show_index=True, inline_stats=False, show_playable=False)
 
                 valid = {str(cd["index"]): cd for cd in cards}
                 if min_sel == 0:
