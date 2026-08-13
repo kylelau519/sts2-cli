@@ -2656,6 +2656,13 @@ public class RunSimulator
                 };
             }).ToList();
 
+        // If all options are locked, the event is effectively waiting for a "Proceed" / "Leave".
+        // The game UI might show a single generic proceed button, but headless should just auto-proceed.
+        if (options.Count > 0 && options.All(o => (bool?)o["is_locked"] == true))
+        {
+            Log($"All event options are locked, auto-proceeding.");
+            return DoLeaveRoom(_runState!.Players[0]);
+        }
         // Resolve event name — try ancients table first (for Neow), then events
         var eventEntry = localEvent.Id?.Entry ?? localEvent.GetType().Name.ToUpperInvariant();
         var eventName = _loc.Bilingual("ancients", eventEntry + ".title");
