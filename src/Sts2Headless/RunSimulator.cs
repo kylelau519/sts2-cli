@@ -1810,22 +1810,7 @@ public class RunSimulator
             var bundles = _pendingBundles.Select((bundle, i) => new Dictionary<string, object?>
             {
                 ["index"] = i,
-                ["cards"] = bundle.Select(card =>
-                {
-                    var stats = new Dictionary<string, object?>();
-                    try { foreach (var dv in card.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-                    var bkws = card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                    return new Dictionary<string, object?>
-                    {
-                        ["name"] = _loc.Card(card.Id.Entry),
-                        ["cost"] = card.EnergyCost?.GetResolved() ?? 0,
-                        ["type"] = card.Type.ToString(),
-                        ["rarity"] = card.Rarity.ToString(),
-                        ["description"] = _loc.Bilingual("cards", card.Id.Entry + ".description"),
-                        ["stats"] = stats.Count > 0 ? stats : null,
-                        ["keywords"] = bkws?.Count > 0 ? bkws : null,
-                    };
-                }).ToList(),
+                ["cards"] = bundle.Select(card => CardToJson(card, includeId: false, includeAfterUpgrade: false)).ToList(),
             }).ToList();
 
             return new Dictionary<string, object?>
@@ -1844,22 +1829,9 @@ public class RunSimulator
             var rewardCards = _cardSelector.PendingRewardCards!;
             var cards = rewardCards.Select((cr, i) =>
             {
-                var stats = new Dictionary<string, object?>();
-                try { foreach (var dv in cr.Card.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-                var rrkws = cr.Card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                return new Dictionary<string, object?>
-                {
-                    ["index"] = i,
-                    ["id"] = cr.Card.Id.ToString(),
-                    ["name"] = _loc.Card(cr.Card.Id.Entry),
-                    ["cost"] = cr.Card.EnergyCost?.GetResolved() ?? 0,
-                    ["type"] = cr.Card.Type.ToString(),
-                    ["rarity"] = cr.Card.Rarity.ToString(),
-                    ["description"] = _loc.Bilingual("cards", cr.Card.Id.Entry + ".description"),
-                    ["stats"] = stats.Count > 0 ? stats : null,
-                    ["keywords"] = rrkws?.Count > 0 ? rrkws : null,
-                    ["after_upgrade"] = GetUpgradedInfo(cr.Card),
-                };
+                var cardInfo = CardToJson(cr.Card);
+                cardInfo["index"] = i;
+                return cardInfo;
             }).ToList();
 
             return new Dictionary<string, object?>
@@ -1880,23 +1852,9 @@ public class RunSimulator
         {
             var opts = _cardSelector.PendingOptions.Select((card, i) =>
             {
-                var stats = new Dictionary<string, object?>();
-                try { foreach (var dv in card.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-                var selkws = card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                return new Dictionary<string, object?>
-                {
-                    ["index"] = i,
-                    ["id"] = card.Id.ToString(),
-                    ["name"] = _loc.Card(card.Id.Entry),
-                    ["cost"] = card.EnergyCost?.GetResolved() ?? 0,
-                    ["type"] = card.Type.ToString(),
-                    ["rarity"] = card.Rarity.ToString(),
-                    ["upgraded"] = card.IsUpgraded,
-                    ["stats"] = stats.Count > 0 ? stats : null,
-                    ["description"] = _loc.Bilingual("cards", card.Id.Entry + ".description"),
-                    ["keywords"] = selkws?.Count > 0 ? selkws : null,
-                    ["after_upgrade"] = GetUpgradedInfo(card),
-                };
+                var cardInfo = CardToJson(card, includeUpgraded: true);
+                cardInfo["index"] = i;
+                return cardInfo;
             }).ToList();
 
             return new Dictionary<string, object?>
@@ -2323,6 +2281,9 @@ public class RunSimulator
             ["player_powers"] = playerPowers?.Count > 0 ? playerPowers : null,
             ["draw_pile_count"] = pcs?.DrawPile?.Cards?.Count ?? 0,
             ["discard_pile_count"] = pcs?.DiscardPile?.Cards?.Count ?? 0,
+            ["draw_pile"] = PileCardsToJson(pcs?.DrawPile),
+            ["discard_pile"] = PileCardsToJson(pcs?.DiscardPile),
+            ["exhaust_pile"] = PileCardsToJson(pcs?.ExhaustPile),
         };
 
         // Character-specific mechanics
@@ -2461,22 +2422,9 @@ public class RunSimulator
 
         var cards = _pendingCardReward.Cards.Select((c, i) =>
         {
-            var stats = new Dictionary<string, object?>();
-            try { foreach (var dv in c.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-            var crkws = c.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-            return new Dictionary<string, object?>
-            {
-                ["index"] = i,
-                ["id"] = c.Id.ToString(),
-                ["name"] = _loc.Card(c.Id.Entry),
-                ["cost"] = c.EnergyCost?.GetResolved() ?? 0,
-                ["type"] = c.Type.ToString(),
-                ["rarity"] = c.Rarity.ToString(),
-                ["description"] = _loc.Bilingual("cards", c.Id.Entry + ".description"),
-                ["stats"] = stats.Count > 0 ? stats : null,
-                ["keywords"] = crkws?.Count > 0 ? crkws : null,
-                ["after_upgrade"] = GetUpgradedInfo(c),
-            };
+            var cardInfo = CardToJson(c);
+            cardInfo["index"] = i;
+            return cardInfo;
         }).ToList();
 
         return new Dictionary<string, object?>
@@ -2730,44 +2678,40 @@ public class RunSimulator
             .Select((e, i) =>
             {
                 var card = e.CreationResult?.Card;
-                var entry = card?.Id.Entry ?? "?";
-                var stats = new Dictionary<string, object?>();
-                int cardCost = 0;
-                try
+                Dictionary<string, object?> cardInfo;
+                if (card != null)
                 {
-                    if (card != null)
+                    // The shop entry's card can have uninitialized DynamicVars (stats: null while
+                    // after_upgrade is populated, #68). Read base stats from a fresh ModelDb clone
+                    // at the card's current upgrade level, like GetUpgradedInfo.
+                    Dictionary<string, object?> stats;
+                    try
                     {
-                        cardCost = card.EnergyCost?.GetResolved() ?? 0;
-                        // The shop entry's card can have uninitialized DynamicVars (stats: null
-                        // while after_upgrade is populated, #68). Read base stats from a fresh
-                        // ModelDb clone at the card's current upgrade level, like GetUpgradedInfo.
                         var fresh = ModelDb.GetById<CardModel>(card.Id).ToMutable();
                         for (int u = 0; u < card.CurrentUpgradeLevel; u++)
                         {
                             fresh.UpgradeInternal();
                             fresh.FinalizeUpgradeInternal();
                         }
-                        foreach (var dv in fresh.DynamicVars.Values)
-                            stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue;
+                        stats = StatsFromBaseVars(fresh);
                     }
+                    catch { stats = new(); }
+                    cardInfo = CardToJson(card, statsOverride: stats, includeId: false);
+                    cardInfo["card_cost"] = cardInfo["cost"];   // energy cost, renamed to avoid colliding with shop price
                 }
-                catch { }
-                var shopkws = card?.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                return new Dictionary<string, object?>
+                else
                 {
-                    ["index"] = i,
-                    ["name"] = _loc.Card(entry),
-                    ["type"] = card?.Type.ToString() ?? "?",
-                    ["rarity"] = card?.Rarity.ToString() ?? "?",
-                    ["card_cost"] = cardCost,
-                    ["description"] = _loc.Bilingual("cards", entry + ".description"),
-                    ["stats"] = stats.Count > 0 ? stats : null,
-                    ["keywords"] = shopkws?.Count > 0 ? shopkws : null,
-                    ["after_upgrade"] = card != null ? GetUpgradedInfo(card) : null,
-                    ["cost"] = e.Cost,
-                    ["is_stocked"] = e.IsStocked,
-                    ["on_sale"] = e.IsOnSale,
-                };
+                    cardInfo = new Dictionary<string, object?>
+                    {
+                        ["name"] = _loc.Card("?"), ["type"] = "?", ["rarity"] = "?",
+                        ["card_cost"] = 0, ["description"] = _loc.Bilingual("cards", "?.description"),
+                    };
+                }
+                cardInfo["index"] = i;
+                cardInfo["cost"] = e.Cost;           // gold price, overwrites CardToJson's energy-cost value
+                cardInfo["is_stocked"] = e.IsStocked;
+                cardInfo["on_sale"] = e.IsOnSale;
+                return cardInfo;
             }).ToList();
 
         var relics = inv.RelicEntries.Select((e, i) => new Dictionary<string, object?>
@@ -2960,6 +2904,77 @@ public class RunSimulator
         }
     }
 
+    private static Dictionary<string, object?> StatsFromBaseVars(CardModel card)
+    {
+        var stats = new Dictionary<string, object?>();
+        try { foreach (var dv in card.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
+        return stats;
+    }
+
+    private static List<string>? KeywordsToJson(CardModel card)
+    {
+        var kws = card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
+        return kws?.Count > 0 ? kws : null;
+    }
+
+    /// <summary>
+    /// Serializes a card's static/base-value fields -- shared by every card list that shows base
+    /// values rather than a live combat preview (deck, card_reward, card_select, bundle_select,
+    /// shop, and draw/discard/exhaust piles). NOT used by CombatPlayState's hand builder, which
+    /// resolves DynamicVars against CurrentTarget/CardPreviewMode for live damage/block and needs
+    /// can_play/target_type/damage_by_target -- none of which a static view has or needs.
+    /// </summary>
+    private Dictionary<string, object?> CardToJson(
+        CardModel card,
+        Dictionary<string, object?>? statsOverride = null,
+        bool includeId = true,
+        bool includeUpgraded = false,
+        bool includeAfterUpgrade = true,
+        bool includeEnchantmentAffliction = false)
+    {
+        var result = new Dictionary<string, object?>();
+        if (includeId) result["id"] = card.Id.ToString();
+        result["name"] = _loc.Card(card.Id.Entry);
+        result["cost"] = card.EnergyCost?.GetResolved() ?? 0;
+        result["type"] = card.Type.ToString();
+        result["rarity"] = card.Rarity.ToString();
+        if (includeUpgraded) result["upgraded"] = card.IsUpgraded;
+        result["description"] = _loc.Bilingual("cards", card.Id.Entry + ".description");
+        var stats = statsOverride ?? StatsFromBaseVars(card);
+        result["stats"] = stats.Count > 0 ? stats : null;
+        result["keywords"] = KeywordsToJson(card);
+        if (includeAfterUpgrade) result["after_upgrade"] = GetUpgradedInfo(card);
+        if (includeEnchantmentAffliction)
+        {
+            if (card.Enchantment != null)
+            {
+                result["enchantment"] = _loc.Bilingual("enchantments", card.Enchantment.Id.Entry + ".title");
+                try { if (card.Enchantment.Amount != 0) result["enchantment_amount"] = card.Enchantment.Amount; } catch { }
+            }
+            if (card.Affliction != null)
+            {
+                result["affliction"] = _loc.Bilingual("afflictions", card.Affliction.Id.Entry + ".title");
+                try { if (card.Affliction.Amount != 0) result["affliction_amount"] = card.Affliction.Amount; } catch { }
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Serializes a CardPile in pile order -- index 0 is next to draw (draw_pile) / most
+    /// recently discarded or exhausted (discard_pile/exhaust_pile). Order is real and meaningful:
+    /// CardPile is backed by an ordered List&lt;CardModel&gt;, and shuffles are discrete RNG events
+    /// (CardPile.RandomizeOrderInternal / CardPileCmd.Shuffle), not lazy per-draw reordering.</summary>
+    private List<Dictionary<string, object?>>? PileCardsToJson(CardPile? pile)
+    {
+        if (pile?.Cards == null) return null;
+        return pile.Cards.Select((c, i) =>
+        {
+            var cardInfo = CardToJson(c, includeUpgraded: true, includeEnchantmentAffliction: true);
+            cardInfo["index"] = i;
+            return cardInfo;
+        }).ToList();
+    }
+
     /// <summary>Compute what a card would look like after upgrading (stats + cost + description).</summary>
     private Dictionary<string, object?>? GetUpgradedInfo(CardModel card)
     {
@@ -3016,6 +3031,7 @@ public class RunSimulator
                     ["name"] = _loc.Relic(r.Id.Entry),
                     ["description"] = _loc.Bilingual("relics", r.Id.Entry + ".description"),
                     ["vars"] = vars.Count > 0 ? vars : null,
+                    ["counter"] = r.ShowCounter ? r.DisplayAmount : null,
                 };
             }).ToList(),
             ["potions"] = player.Potions?.Select((p, i) =>
@@ -3033,37 +3049,11 @@ public class RunSimulator
                 };
             }).Where(x => x != null).ToList(),
             ["deck_size"] = player.Deck?.Cards?.Count(c => c != null) ?? 0,
+            // Note: as of this change, deck cards carry "rarity" (via the shared CardToJson
+            // helper), which they previously omitted -- a confirmed quirk, not a preserved one.
             ["deck"] = player.Deck?.Cards?.Where(c => c != null).Select(c =>
-            {
-                var dstats = new Dictionary<string, object?>();
-                try { foreach (var dv in c.DynamicVars.Values) dstats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-                var dkws = c.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                var dcard = new Dictionary<string, object?>
-                {
-                    ["id"] = c.Id.ToString(),
-                    ["name"] = _loc.Card(c.Id.Entry),
-                    ["cost"] = c.EnergyCost?.GetResolved() ?? 0,
-                    ["type"] = c.Type.ToString(),
-                    ["upgraded"] = c.IsUpgraded,
-                    ["description"] = _loc.Bilingual("cards", c.Id.Entry + ".description"),
-                    ["stats"] = dstats.Count > 0 ? dstats : null,
-                    ["keywords"] = dkws?.Count > 0 ? dkws : null,
-                    ["after_upgrade"] = GetUpgradedInfo(c),
-                };
-                // Enchantment/affliction metadata, matching the combat hand export so clients
-                // can see e.g. Slither applied to a deck card after an event (#76).
-                if (c.Enchantment != null)
-                {
-                    dcard["enchantment"] = _loc.Bilingual("enchantments", c.Enchantment.Id.Entry + ".title");
-                    try { if (c.Enchantment.Amount != 0) dcard["enchantment_amount"] = c.Enchantment.Amount; } catch { }
-                }
-                if (c.Affliction != null)
-                {
-                    dcard["affliction"] = _loc.Bilingual("afflictions", c.Affliction.Id.Entry + ".title");
-                    try { if (c.Affliction.Amount != 0) dcard["affliction_amount"] = c.Affliction.Amount; } catch { }
-                }
-                return dcard;
-            }).ToList(),
+                CardToJson(c!, includeUpgraded: true, includeEnchantmentAffliction: true)
+            ).ToList(),
         };
     }
 
