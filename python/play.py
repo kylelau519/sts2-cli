@@ -177,8 +177,7 @@ def ensure_setup():
             sys.exit(1)
         print("  ✓ Build succeeded")
 
-# Language setting (set by --lang flag)
-LANG = "en"  # "en", "zh", or "both"
+# Language setting removed
 
 # ─── Native save file support ───
 
@@ -226,12 +225,12 @@ def show_native_save(save_path):
         with open(save_path) as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
-        print(f"{t('Error:','错误:')} Save file is not valid JSON: {save_path}")
+        print(f"Error: Save file is not valid JSON: {save_path}")
         print(f"  {e}")
         sys.exit(1)
 
-    print(f"\n{'═' * 60}")
-    print(f"  {t('Native Save File', '游戏原生存档')}")
+    print(f"\\n{'═' * 60}")
+    print(f"  Native Save File")
     print(f"  {save_path}")
     print(f"{'═' * 60}")
     seed = data.get("rng", {}).get("seed", "?")
@@ -243,21 +242,20 @@ def show_native_save(save_path):
     run_min = run_time // 60
     run_sec = run_time % 60
 
-    print(f"\n  {t('Seed','种子')}: {seed}")
-    print(f"  {t('Ascension','攀升')}: {ascension}")
-    print(f"  {t('Act','幕')}: {act_idx + 1} ({act_name})")
-    print(f"  {t('Time','时间')}: {run_min}m{run_sec:02d}s")
+    print(f"\\n  Seed: {seed}")
+    print(f"  Ascension: {ascension}")
+    print(f"  Act: {act_idx + 1} ({act_name})")
+    print(f"  Time: {run_min}m{run_sec:02d}s")
     print(f"  Schema: v{data.get('schema_version','?')}")
     room = data.get("pre_finished_room", {})
     if room:
         room_type = room.get("room_type", "?")
         enc = room.get("encounter_id") or room.get("event_id") or ""
-        room_type_display = t(room_type, ROOM_TYPE_ZH.get(room_type, room_type))
-        print(f"  {t('Room','当前房间')}: {room_type_display}" + (f" ({_id_to_name(enc)})" if enc else ""))
+        print(f"  Room: {room_type}" + (f" ({_id_to_name(enc)})" if enc else ""))
 
     visited = data.get("visited_map_coords", [])
     if visited:
-        print(f"  {t('Map','地图')}: {t('Floor','层')} {len(visited)} ({len(visited)} {t('nodes visited','个节点已访问')})")
+        print(f"  Map: Floor {len(visited)} ({len(visited)} nodes visited)")
 
     for player in data.get("players", []):
         char_name = _id_to_name(player.get("character_id", "?"))
@@ -266,11 +264,11 @@ def show_native_save(save_path):
         gold = player.get("gold", 0)
         energy = player.get("max_energy", 3)
 
-        print(f"\n  {'─' * 50}")
-        print(f"  {char_name}  HP: {hp}/{max_hp}  {t('Gold','金币')}: {gold}  {t('Energy','能量')}: {energy}")
+        print(f"\\n  {'─' * 50}")
+        print(f"  {char_name}  HP: {hp}/{max_hp}  Gold: {gold}  Energy: {energy}")
 
         deck = player.get("deck", [])
-        print(f"\n  {t('Deck','牌组')} ({len(deck)}):")
+        print(f"\\n  Deck ({len(deck)}):")
         card_counts = {}
         for card in deck:
             cid = _id_to_name(card.get("id", "?"))
@@ -282,19 +280,19 @@ def show_native_save(save_path):
 
         relics = player.get("relics", [])
         if relics:
-            print(f"\n  {t('Relics','遗物')} ({len(relics)}):")
+            print(f"\\n  Relics ({len(relics)}):")
             for r in relics:
                 print(f"    🔶 {_id_to_name(r.get('id', '?'))}")
 
         potions = player.get("potions", [])
         if potions:
-            print(f"\n  {t('Potions','药水')} ({len(potions)}):")
+            print(f"\\n  Potions ({len(potions)}):")
             for p in potions:
                 print(f"    🧪 [{p.get('slot_index', '?')}] {_id_to_name(p.get('id', '?'))}")
 
     if acts:
-        print(f"\n  {'─' * 50}")
-        print(f"  {t('Acts summary','幕章概览')}:")
+        print(f"\\n  {'─' * 50}")
+        print(f"  Acts summary:")
         for i, act in enumerate(acts):
             act_id = _id_to_name(act.get("id", "?"))
             rooms_data = act.get("rooms", {})
@@ -304,10 +302,10 @@ def show_native_save(save_path):
             events = rooms_data.get("events_visited", 0)
             bosses = rooms_data.get("boss_encounters_visited", 0)
             marker = " ◀" if i == act_idx else ""
-            print(f"    {t('Act','幕')} {i+1}: {act_id}  Boss: {boss}  "
-                  f"[{t('M','怪')}{normals} {t('E','英')}{elites} {t('?','事')}{events} B{bosses}]{marker}")
+            print(f"    Act {i+1}: {act_id}  Boss: {boss}  "
+                  f"[M{normals} E{elites} ?{events} B{bosses}]{marker}")
 
-    print(f"\n{'═' * 60}\n")
+    print(f"\\n{'═' * 60}\\n")
 
 # ─── Display helpers ───
 
@@ -326,14 +324,6 @@ def desc(obj):
         text = obj
         text = re.sub(r'\[/?[^\]]+\]', '', text)  # strip BBCode [tags]
 
-        # Handle SmartFormat expressions:
-        # {IfUpgraded:show:text1|text2} → text2 (non-upgraded default)
-        # {InCombat:text1|text2} → text1 (show combat version)
-        # {energyPrefix:energyIcons(1)} → [E] (energy symbol)
-        # {Stars:starIcons()} → [S] (star symbol)
-        # {VarName:diff()} → [VarName] (simple var)
-        # {VarName:choose(a|b)} → [VarName]
-
         def smart_replace(m):
             full = m.group(1)
             # Handle conditional: {IfUpgraded:show:textA|textB}
@@ -347,10 +337,10 @@ def desc(obj):
             if full.startswith("InCombat:"):
                 parts = full[len("InCombat:"):].split("|")
                 return parts[0].lstrip("\n")  # show combat version
-            # Energy icons: {Energy:energyIcons()} → [Energy]能量
+            # Energy icons: {Energy:energyIcons()} → [Energy]E
             if "energyIcons" in full:
                 var = full.split(":")[0]
-                return f"[{var}]{t('E','能量')}"
+                return f"[{var}]E"
             # Star icons: {Stars:starIcons()} → [Stars]⭐
             if "starIcons" in full:
                 var = full.split(":")[0]
@@ -388,61 +378,16 @@ def bar(current, maximum, width=20):
     filled = int(current / max(maximum, 1) * width)
     return c("█" * filled, "red") + c("░" * (width - filled), "dim")
 
-def t(en, zh=None):
-    """Translate UI string based on LANG setting."""
-    if zh is None:
-        return en
-    if LANG == "en":
-        return en
-    if LANG == "both":
-        return f"{en} / {zh}"
-    return zh
-
-# Card rarities — keys match sts2 CardRarity.ToString(); ZHS from localization_zhs/gameplay_ui.json CARD_RARITY.*
-RARITY_ZH = {
-    "Basic": "基础",
-    "Common": "普通",
-    "Uncommon": "罕见",
-    "Rare": "稀有",
-    "Curse": "诅咒",
-    "Status": "状态",
-    "Token": "衍生",
-    "Event": "事件",
-    "Quest": "任务",
-    "Ancient": "先古",
-}
-# Matches localization_zhs/card_keywords.json (display only)
-CARD_KW_ZH = {
-    "Exhaust": "消耗", "Innate": "固有", "Ethereal": "虚无", "Retain": "保留",
-    "Sly": "奇巧", "Eternal": "永恒", "Unplayable": "不能被打出",
-}
 # End of title line (restrictive / rules)
 CARD_KW_SUFFIX_ORDER = ("Exhaust", "Unplayable", "Eternal")
 # Before description as [A/B/C]
 CARD_KW_PREFIX_ORDER = ("Innate", "Ethereal", "Retain", "Sly")
 
-CARD_TYPE_ZH = {"Attack": "攻击", "Skill": "技能", "Power": "能力", "Status": "状态", "Curse": "诅咒"}
-NODE_TYPE_ZH = {"Monster": "怪物", "Elite": "精英", "Boss": "Boss", "RestSite": "休息处",
-                "Shop": "商店", "Treasure": "宝箱", "Event": "事件", "Unknown": "未知", "Ancient": "远古",
-                "CombatRoom": "战斗", "EliteRoom": "精英", "BossRoom": "Boss",
-                "RestSiteRoom": "休息站", "ShopRoom": "商店", "EventRoom": "事件",
-                "TreasureRoom": "宝箱", "MapRoom": "地图"}
-ROOM_TYPE_ZH = {
-    "CombatRoom": "战斗",
-    "EventRoom": "事件",
-    "RestSiteRoom": "休息站",
-    "ShopRoom": "商店",
-    "TreasureRoom": "宝箱",
-    "BossRoom": "Boss",
-    "EliteRoom": "精英",
-    "MapRoom": "地图",
-}
-
 # ─── Game display ───
 
 SPECIAL_VARS = {
-    "energyprefix": "能量" if True else "E",  # placeholder, overridden by LANG
-    "energy": "能量",
+    "energyprefix": "E",
+    "energy": "Energy",
 }
 
 def resolve_template(text, vars_dict):
@@ -484,7 +429,7 @@ def card_desc(card):
 
 
 def _card_kw_label(kw):
-    return t(kw, CARD_KW_ZH.get(kw, kw))
+    return kw
 
 
 def split_card_keywords(keywords):
@@ -549,7 +494,7 @@ def card_description_display_lines(card):
 
 
 def combat_hand_inline_stat_str(stats, *, card=None, osty=None):
-    """Title-row 伤/挡 from RunSimulator ``stats`` (DynamicVars, keys lowercased).
+    """Title-row dmg/blk from RunSimulator ``stats`` (DynamicVars, keys lowercased).
 
     Plain ``damage`` is used for Strike-like cards; many attacks use ``calculateddamage``
     or companion hits use ``ostydamage``. Some Necrobinder cards add Osty HP to the card
@@ -587,10 +532,10 @@ def combat_hand_inline_stat_str(stats, *, card=None, osty=None):
             dmg = int(v)
 
     if dmg is not None:
-        parts.append(c(f"{dmg}{t('dmg','伤')}", "red"))
+        parts.append(c(f"{dmg}dmg", "red"))
     blk = stats.get("block")
     if blk is not None:
-        parts.append(c(f"{blk}{t('blk','挡')}", "blue"))
+        parts.append(c(f"{blk}blk", "blue"))
     return " ".join(parts)
 
 
@@ -624,8 +569,8 @@ def show_player(p, show_deck=False):
     name = n(p.get("name", "?"))
 
     print(f"  {c(name, 'bold')}  HP {bar(hp, mhp)} {c(f'{hp}/{mhp}', 'red')}"
-          + (f"  {c(str(blk), 'blue')} {t('blk','挡')}" if blk > 0 else "")
-          + f"  {t('Gold','金')} {c(str(gold), 'yellow')}  {t('Deck','牌组')} {deck}")
+          + (f"  {c(str(blk), 'blue')} blk" if blk > 0 else "")
+          + f"  Gold {c(str(gold), 'yellow')}  Deck {deck}")
     for r in p.get("relics", []):
         print(f"    🔶 {relic_str(r)}")
     for pot in p.get("potions", []):
@@ -634,7 +579,7 @@ def show_player(p, show_deck=False):
     if show_deck:
         cards = p.get("deck", [])
         if cards:
-            print(f"  {c(t('Deck:','牌组:'), 'bold')}")
+            print(f"  {c('Deck:', 'bold')}")
             print_cards_grid(cards, show_index=False, inline_stats=False, show_playable=False)
 
 def show_combat(state):
@@ -645,7 +590,7 @@ def show_combat(state):
     discard = state.get("discard_pile_count", 0)
 
     print(f"\n{'─' * 60}")
-    print(f"  {c(t(f'Round {rnd}',f'回合 {rnd}'), 'bold')}  {t('Energy','能量')} {c(f'{energy}/{max_energy}', 'cyan')}  {t('Draw','抽牌')} {draw}  {t('Discard','弃牌')} {discard}")
+    print(f"  {c(f'Round {rnd}', 'bold')}  Energy {c(f'{energy}/{max_energy}', 'cyan')}  Draw {draw}  Discard {discard}")
     show_player(state.get("player", {}))
 
     # Player powers/buffs/debuffs
@@ -659,7 +604,7 @@ def show_combat(state):
                 pw_desc = resolve_template(pw_desc, {"Amount": abs(amt) if isinstance(amt, (int, float)) else amt})
             is_debuff = isinstance(amt, (int, float)) and amt < 0
             color = "red" if is_debuff else "green"
-            label = t("Debuff", "减益") if is_debuff else t("Buff", "增益")
+            label = "Debuff" if is_debuff else "Buff"
             desc_str = f": {c(pw_desc, 'dim')}" if pw_desc else ""
             pw_name = n(pw.get('name', '?'))
             print(f"    {c(label, color)} {c(f'{pw_name}{amt_str}', color)}{desc_str}")
@@ -671,9 +616,9 @@ def show_combat(state):
             ohp, omhp = osty.get("hp", 0), osty.get("max_hp", 1)
             oblk = osty.get("block", 0)
             print(f"    🦴 {n(osty.get('name','Osty'))}  {bar(ohp, omhp)} {ohp}/{omhp}"
-                  + (f"  {c(str(oblk), 'blue')}{t('blk','挡')}" if oblk else ""))
+                  + (f"  {c(str(oblk), 'blue')}blk" if oblk else ""))
         else:
-            print(f"    🦴 {c(t('Osty (dead)','Osty (已死亡)'), 'dim')}")
+            print(f"    🦴 {c('Osty (dead)', 'dim')}")
 
     # Character-specific: Defect's Orbs
     orbs = state.get("orbs")
@@ -686,12 +631,12 @@ def show_combat(state):
             pv, ev = orb.get("passive", 0), orb.get("evoke", 0)
             orb_parts.append(f"{icon}{n(orb.get('name', otype))}({pv}/{ev})")
         slots = state.get("orb_slots", len(orbs))
-        print(f"    {t('Orbs','充能球')} [{len(orbs)}/{slots}]: {' '.join(orb_parts)}")
+        print(f"    Orbs [{len(orbs)}/{slots}]: {' '.join(orb_parts)}")
 
     # Character-specific: Regent's Stars
     stars = state.get("stars")
     if stars is not None:
-        print(f"    ⭐ {t('Stars','星辰')}: {c(str(stars), 'yellow')}")
+        print(f"    ⭐ Stars: {c(str(stars), 'yellow')}")
 
     print()
     for e in state.get("enemies", []):
@@ -712,30 +657,30 @@ def show_combat(state):
                     else:
                         intent_parts.append(c(f"⚔{dmg}", "red"))
                 else:
-                    intent_parts.append(c(t("⚔ATK","⚔攻击"), "red"))
+                    intent_parts.append(c("⚔ATK", "red"))
             elif itype == "Defend":
-                intent_parts.append(c(t("🛡DEF","🛡防御"), "blue"))
+                intent_parts.append(c("🛡DEF", "blue"))
             elif itype in ("Buff", "Heal"):
-                intent_parts.append(c(t(f"⬆{itype}",f"⬆{'增益' if itype=='Buff' else '回复'}"), "magenta"))
+                intent_parts.append(c(f"⬆{itype}", "magenta"))
             elif itype == "Debuff":
-                intent_parts.append(c(t("⬇Debuff","⬇减益"), "yellow"))
+                intent_parts.append(c("⬇Debuff", "yellow"))
             elif itype == "DebuffStrong":
-                intent_parts.append(c(t("⬇Strong","⬇强减益"), "yellow"))
+                intent_parts.append(c("⬇Strong", "yellow"))
             elif itype in ("CardDebuff", "StatusCard"):
-                intent_parts.append(c(t("⬇Cards","⬇塞牌"), "yellow"))
+                intent_parts.append(c("⬇Cards", "yellow"))
             elif itype == "DeathBlow":
                 if dmg is not None:
                     intent_parts.append(c(f"💀{dmg}", "red"))
                 else:
-                    intent_parts.append(c(t("💀KILL","💀致命一击"), "red"))
+                    intent_parts.append(c("💀KILL", "red"))
             elif itype == "Escape":
-                intent_parts.append(c(t("🏃Escape","🏃逃跑"), "dim"))
+                intent_parts.append(c("🏃Escape", "dim"))
             elif itype == "Summon":
-                intent_parts.append(c(t("📢Summon","📢召唤"), "magenta"))
+                intent_parts.append(c("📢Summon", "magenta"))
             elif itype == "Sleep":
-                intent_parts.append(c(t("💤Sleep","💤休眠"), "dim"))
+                intent_parts.append(c("💤Sleep", "dim"))
             elif itype == "Stun":
-                intent_parts.append(c(t("⚡Stun","⚡眩晕"), "yellow"))
+                intent_parts.append(c("⚡Stun", "yellow"))
             elif itype == "Hidden":
                 intent_parts.append(c("? ???", "dim"))
             elif itype:
@@ -750,7 +695,7 @@ def show_combat(state):
             power_str = "  " + c(", ".join(pw_parts), "dim")
 
         print(f"  [{e['index']}] {n(e['name'])}  {bar(hp, mhp)} {hp}/{mhp}"
-              + (f"  {c(str(blk), 'blue')} {t('blk','挡')}" if blk else "")
+              + (f"  {c(str(blk), 'blue')} blk" if blk else "")
               + f"  {intent_str}{power_str}")
 
     print()
@@ -779,7 +724,7 @@ def show_map(state, send_fn=None):
     print(f"\n{'═' * 60}")
     boss_name = ctx.get("boss", {}).get("name")
     boss_str = f" — {c(n(boss_name), 'red')}" if boss_name else ""
-    print(f"  {c(f'{act_name}', 'bold')} — {t('Floor','层')} {floor}{boss_str}")
+    print(f"  {c(f'{act_name}', 'bold')} — Floor {floor}{boss_str}")
     show_player(state.get("player", {}))
     print()
     type_icons = {
@@ -789,7 +734,7 @@ def show_map(state, send_fn=None):
     }
     for i, ch in enumerate(choices):
         icon = type_icons.get(ch["type"], "?")
-        ntype = t(ch["type"], NODE_TYPE_ZH.get(ch["type"], ch["type"]))
+        ntype = ch["type"]
         print(f"  [{i}] {icon} {ntype}")
 
 def _format_upgrade_preview(stats, aug, current_cost=None):
@@ -936,19 +881,19 @@ def card_pick_quantity_hint(mn, mx):
     """Short hint for prompts / help (N–M cards)."""
     if mn == mx:
         if mn == 1:
-            return t("pick 1 card", "选 1 张")
-        return t(f"pick exactly {mn} cards", f"须选 {mn} 张")
+            return "pick 1 card"
+        return f"pick exactly {mn} cards"
     if mn == 0:
-        return t(f"pick 0–{mx} cards (or s to skip)", f"可选 0–{mx} 张（或 s 跳过）")
-    return t(f"pick {mn}–{mx} cards", f"须选 {mn}–{mx} 张")
+        return f"pick 0–{mx} cards (or s to skip)"
+    return f"pick {mn}–{mx} cards"
 
 
 def show_card_reward(state):
     print(f"\n{'─' * 60}")
     gold_earned = state.get("gold_earned", 0)
     if gold_earned > 0:
-        print(f"  {c(t('Combat won!','战斗胜利!'), 'green')} +{c(str(gold_earned), 'yellow')}{t('g','金')}")
-    print(f"  {c(t('Card Reward','卡牌奖励'), 'bold')} — {t('choose one (or skip)','选一张（或跳过）')}")
+        print(f"  {c('Combat won!', 'green')} +{c(str(gold_earned), 'yellow')}g")
+    print(f"  {c('Card Reward', 'bold')} — choose one (or skip)")
     show_player(state.get("player", {}))
     print()
     cards = state.get("cards", [])
@@ -958,9 +903,9 @@ def show_card_reward(state):
     print()
     if cards:
         hi = len(cards) - 1
-        print(f"  {c(t(f'Pick one card: type index 0–{hi}, or s to skip.', f'请选择一张：输入编号 0–{hi}，或 s 跳过。'), 'yellow')}")
+        print(f"  {c(f'Pick one card: type index 0–{hi}, or s to skip.', 'yellow')}")
     else:
-        print(f"  {c(t('No cards to pick.', '没有可选卡牌。'), 'dim')}")
+        print(f"  {c('No cards to pick.', 'dim')}")
 
 def show_shop(state):
     print(f"\n{'─' * 60}")
