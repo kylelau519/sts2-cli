@@ -240,7 +240,9 @@ public class RunSimulator
             if (player == null)
                 return Error($"Unknown character: {character}");
 
-            var seedStr = seed ?? "headless_" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var seedStr = seed != null 
+                ? MegaCrit.Sts2.Core.Helpers.SeedHelper.CanonicalizeSeed(seed) 
+                : "headless_" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             Log($"Creating RunState with seed={seedStr}");
 
             // Use CreateForTest which properly handles mutable copies internally
