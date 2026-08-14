@@ -5,7 +5,8 @@ from display import (
     card_pick_quantity_hint,
     n,
     potion_str,
-    relic_str,
+    print_cards_grid,
+    print_relics_grid,
     show_player,
     _render_map,
 )
@@ -14,6 +15,9 @@ from save_load import _list_saves
 
 class _QuitRequested(Exception):
     pass
+
+
+_PILE_TYPE_ORDER = {"Attack": 0, "Skill": 1, "Power": 2}
 
 
 def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_min=1, multi_max=1):
@@ -40,6 +44,9 @@ def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_
     {c('deck', 'cyan')}     — show deck
     {c('potions', 'cyan')}  — show potions
     {c('relics', 'cyan')}   — show relics
+    {c('draw', 'cyan')}     — show draw pile (in combat)
+    {c('discard', 'cyan')}  — show discard pile (in combat)
+    {c('exhaust', 'cyan')}  — show exhaust pile (in combat)
     {c('quit', 'cyan')}     — quit
     {c('abandon', 'cyan')}  — abandon run (forfeit)
     {c('save', 'cyan')}     — save game
@@ -71,8 +78,32 @@ def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_
             continue
         if raw == "relics" and state:
             p = state.get("player", {})
-            for r in p.get("relics", []):
-                print(f"  🔶 {relic_str(r)}")
+            relics = p.get("relics", [])
+            if relics:
+                print(f"\n  {c('Relics', 'bold')} ({len(relics)}):")
+                print_relics_grid(relics)
+            else:
+                print("  No relics.")
+            continue
+        if raw in ("draw", "discard", "exhaust") and state:
+            pile = state.get(f"{raw}_pile")
+            label = f"{raw.capitalize()} pile"
+            if pile is None:
+                print(f"  {label} not available (not in combat).")
+            elif not pile:
+                print(f"  {label} is empty.")
+            else:
+                shown = pile
+                if raw == "draw":
+                    # The draw pile's real order tells you exactly what you'll draw next —
+                    # group by type then sort alphabetically within each group, so neither the
+                    # grouping nor the order within it leaks the real (future) draw sequence.
+                    shown = sorted(
+                        pile,
+                        key=lambda cd: (_PILE_TYPE_ORDER.get(cd.get("type"), 3), n(cd.get("name", "?"))),
+                    )
+                print(f"\n  {c(label, 'bold')} ({len(pile)} cards):")
+                print_cards_grid(shown)
             continue
         if raw == "map":
             # Fetch full map from CLI

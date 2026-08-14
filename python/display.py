@@ -250,15 +250,40 @@ def combat_hand_inline_stat_str(stats, *, card=None, osty=None):
 
 
 def relic_str(r):
-    """Format a relic with name and resolved description."""
+    """Format a relic with name, counter (if any), and resolved description."""
     if isinstance(r, dict) and "name" in r:
-        name = n(r["name"])
+        name = c(n(r["name"]), "bold")
+        counter = r.get("counter")
+        counter_str = f" {c(f'×{counter}', 'yellow')}" if counter is not None else ""
         d = desc(r.get("description", {}))
         # Resolve template vars with actual values
         vars_dict = r.get("vars") or {}
         d = resolve_template(d, vars_dict)
-        return f"{name}" + (f": {c(d, 'dim')}" if d else "")
+        return f"{name}{counter_str}" + (f": {c(d, 'dim')}" if d else "")
     return n(r)
+
+
+def print_relics_grid(relics):
+    """Display relics as a grid of panels, mirroring print_cards_grid's card layout."""
+    c_console = Console()
+    panels = []
+    for r in relics:
+        if not r:
+            continue
+        name = n(r.get("name", "?"))
+        counter = r.get("counter")
+        counter_str = f" {c(f'×{counter}', 'yellow')}" if counter is not None else ""
+        title_str = f"🔶 {c(name, 'bold')}{counter_str}"
+
+        d = desc(r.get("description", {}))
+        vars_dict = r.get("vars") or {}
+        d = resolve_template(d, vars_dict)
+        body = c(d, "dim") if d else ""
+
+        panels.append(Panel(Text.from_ansi(body), title=Text.from_ansi(title_str), width=35))
+
+    if panels:
+        c_console.print(Columns(panels))
 
 
 def potion_str(p):

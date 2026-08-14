@@ -205,12 +205,11 @@ class MainLoop:
                 total = len(self.replay_actions)
                 for i, cmd in enumerate(self.replay_actions):
                     state = self.send(cmd, record=True)
-                    pct = (i + 1) * 100 // total
-                    print(f"\r  Replaying... {pct}% ({i+1}/{total})", end="", flush=True)
+                    print(f"\r  Replaying... ({i+1}/{total})", end="", flush=True)
                     if not state:
                         print(f"\n{c('Replay failed at action', 'red')} {i+1}")
                         return None
-                    print(f"\r  {c('Replay complete!', 'green')}" + " " * 30)
+                print(f"\r  {c('Replay complete!', 'green')} ({total}/{total})" + " " * 20)
                 print()
 
         print(f"\n{c('Slay the Spire 2 — Headless CLI', 'bold')}")
@@ -327,7 +326,7 @@ class MainLoop:
         else:
             choice = get_input("Play card [index], (e)nd turn, (p0) potion", set(valid.keys()) | {"help"}, state=state)
             if choice == "help":
-                print("  Enter card index, e=end turn, p0=use potion 0")
+                print("  Enter card index, e=end turn, p0=use potion 0, draw/discard/exhaust=view pile")
                 return state
 
         if choice == "e":
@@ -736,12 +735,14 @@ if __name__ == "__main__":
         load_path = p
 
     native_save_path = None
-    if args.continue_save is not None:
-        native_save_path = args.continue_save
-        if not os.path.isabs(native_save_path):
-            native_save_path = os.path.join(ROOT, native_save_path)
+    if args.continue_save:
+        save_dir = _find_native_save_dir()
+        if not save_dir:
+            print("Could not find the game's native save directory")
+            sys.exit(1)
+        native_save_path = os.path.join(save_dir, "current_run.save")
         if not os.path.isfile(native_save_path):
-            print(f"Save file not found: {native_save_path}")
+            print(f"No native save found at {native_save_path}")
             sys.exit(1)
         show_native_save(native_save_path)
 
