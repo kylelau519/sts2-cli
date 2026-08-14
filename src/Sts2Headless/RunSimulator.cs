@@ -489,19 +489,6 @@ public partial class RunSimulator
         }
     }
 
-    private void SpinWaitForCombatStable()
-    {
-        int maxIterations = 200;
-        for (int i = 0; i < maxIterations; i++)
-        {
-            _syncCtx.Pump();
-            if (!CombatManager.Instance.IsInProgress) return;
-            if (IsPlayPhase()) return;
-            WaitForActionExecutor();
-            if (IsPlayPhase() || !CombatManager.Instance.IsInProgress) return;
-            Thread.Sleep(5);
-        }
-    }
 
     private static Dictionary<string, object?> StatsFromBaseVars(CardModel card)
     {
