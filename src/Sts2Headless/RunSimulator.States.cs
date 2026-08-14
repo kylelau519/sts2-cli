@@ -394,7 +394,7 @@ public partial class RunSimulator
                 ["can_play"] = c.CanPlay(out _, out _),
                 ["target_type"] = c.TargetType.ToString(),
                 ["stats"] = stats.Count > 0 ? stats : null,
-                ["description"] = _loc.Bilingual("cards", c.Id.Entry + ".description"),
+                ["description"] = _loc.GetText("cards", c.Id.Entry + ".description"),
             };
             if (starCost > 0)
             {
@@ -407,12 +407,12 @@ public partial class RunSimulator
             if (kws?.Count > 0) cardInfo["keywords"] = kws;
             if (c.Enchantment != null)
             {
-                cardInfo["enchantment"] = _loc.Bilingual("enchantments", c.Enchantment.Id.Entry + ".title");
+                cardInfo["enchantment"] = _loc.GetText("enchantments", c.Enchantment.Id.Entry + ".title");
                 try { if (c.Enchantment.Amount != 0) cardInfo["enchantment_amount"] = c.Enchantment.Amount; } catch { }
             }
             if (c.Affliction != null)
             {
-                cardInfo["affliction"] = _loc.Bilingual("afflictions", c.Affliction.Id.Entry + ".title");
+                cardInfo["affliction"] = _loc.GetText("afflictions", c.Affliction.Id.Entry + ".title");
                 try { if (c.Affliction.Amount != 0) cardInfo["affliction_amount"] = c.Affliction.Amount; } catch { }
             }
             if (damageByTarget != null && damageByTarget.Count > 0)
@@ -472,7 +472,7 @@ public partial class RunSimulator
                 var ePowers = e.Powers?.Select(pw => new Dictionary<string, object?>
                 {
                     ["name"] = _loc.Power(pw.Id.Entry),
-                    ["description"] = _loc.Bilingual("powers", pw.Id.Entry + ".description"),
+                    ["description"] = _loc.GetText("powers", pw.Id.Entry + ".description"),
                     ["amount"] = pw.Amount,
                 }).ToList();
 
@@ -493,7 +493,7 @@ public partial class RunSimulator
         var playerPowers = player.Creature?.Powers?.Select(pw => new Dictionary<string, object?>
         {
             ["name"] = _loc.Power(pw.Id.Entry),
-            ["description"] = _loc.Bilingual("powers", pw.Id.Entry + ".description"),
+            ["description"] = _loc.GetText("powers", pw.Id.Entry + ".description"),
             ["amount"] = pw.Amount,
         }).ToList();
 
@@ -526,7 +526,7 @@ public partial class RunSimulator
                 result["orbs"] = orbQueue.Orbs.Select((orb, i) => new Dictionary<string, object?>
                 {
                     ["index"] = i,
-                    ["name"] = _loc.Bilingual("orbs", orb.Id.Entry + ".title"),
+                    ["name"] = _loc.GetText("orbs", orb.Id.Entry + ".title"),
                     ["type"] = orb.GetType().Name.Replace("Orb", ""),
                     ["passive"] = (int)orb.PassiveVal,
                     ["evoke"] = (int)orb.EvokeVal,
@@ -731,7 +731,7 @@ public partial class RunSimulator
                 string? title = null;
                 if (opt.Title != null)
                 {
-                    var t = _loc.Bilingual(opt.Title.LocTable, opt.Title.LocEntryKey);
+                    var t = _loc.GetText(opt.Title.LocTable, opt.Title.LocEntryKey);
                     // Check if we actually found a translation (not just the key echoed back)
                     if (t != opt.Title.LocEntryKey)
                         title = t;
@@ -761,7 +761,7 @@ public partial class RunSimulator
                 string? optDesc = null;
                 if (opt.Description != null && !string.IsNullOrEmpty(opt.Description.LocEntryKey))
                 {
-                    var d = _loc.Bilingual(opt.Description.LocTable, opt.Description.LocEntryKey);
+                    var d = _loc.GetText(opt.Description.LocTable, opt.Description.LocEntryKey);
                     if (d != opt.Description.LocEntryKey)
                         optDesc = d;
                 }
@@ -770,7 +770,7 @@ public partial class RunSimulator
                 {
                     var parts = opt.TextKey.Split('.');
                     var optionId = parts.Length > 0 ? parts[^1] : opt.TextKey;
-                    var rd = _loc.Bilingual("relics", optionId + ".description");
+                    var rd = _loc.GetText("relics", optionId + ".description");
                     if (rd != optionId + ".description")
                         optDesc = rd;
                 }
@@ -843,7 +843,7 @@ public partial class RunSimulator
         }
         // Resolve event name — try ancients table first (for Neow), then events
         var eventEntry = localEvent.Id?.Entry ?? localEvent.GetType().Name.ToUpperInvariant();
-        var eventName = _loc.Bilingual("ancients", eventEntry + ".title");
+        var eventName = _loc.GetText("ancients", eventEntry + ".title");
         if (eventName == eventEntry + ".title")
             eventName = _loc.Event(eventEntry);
 
@@ -851,7 +851,7 @@ public partial class RunSimulator
         string? eventDesc = null;
         if (localEvent.Description != null)
         {
-            var d = _loc.Bilingual(localEvent.Description.LocTable, localEvent.Description.LocEntryKey);
+            var d = _loc.GetText(localEvent.Description.LocTable, localEvent.Description.LocEntryKey);
             if (d != localEvent.Description.LocEntryKey)
                 eventDesc = d;
         }
@@ -934,7 +934,7 @@ public partial class RunSimulator
                     cardInfo = new Dictionary<string, object?>
                     {
                         ["name"] = _loc.Card("?"), ["type"] = "?", ["rarity"] = "?",
-                        ["card_cost"] = 0, ["description"] = _loc.Bilingual("cards", "?.description"),
+                        ["card_cost"] = 0, ["description"] = _loc.GetText("cards", "?.description"),
                     };
                 }
                 cardInfo["index"] = i;
@@ -948,7 +948,7 @@ public partial class RunSimulator
         {
             ["index"] = i,
             ["name"] = _loc.Relic(e.Model?.Id.Entry ?? "?"),
-            ["description"] = _loc.Bilingual("relics", (e.Model?.Id.Entry ?? "?") + ".description"),
+            ["description"] = _loc.GetText("relics", (e.Model?.Id.Entry ?? "?") + ".description"),
             ["cost"] = e.Cost,
             ["is_stocked"] = e.IsStocked,
         }).ToList();
@@ -957,7 +957,7 @@ public partial class RunSimulator
         {
             ["index"] = i,
             ["name"] = _loc.Potion(e.Model?.Id.Entry ?? "?"),
-            ["description"] = _loc.Bilingual("potions", (e.Model?.Id.Entry ?? "?") + ".description"),
+            ["description"] = _loc.GetText("potions", (e.Model?.Id.Entry ?? "?") + ".description"),
             ["cost"] = e.Cost,
             ["is_stocked"] = e.IsStocked,
         }).ToList();

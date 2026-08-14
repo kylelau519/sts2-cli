@@ -115,15 +115,6 @@ internal class LocLookup
         }
     }
 
-    /// <summary>Get English name or just the key if not found.</summary>
-    public string Name(string table, string key)
-    {
-        var en = _eng.GetValueOrDefault(table)?.GetValueOrDefault(key);
-        return en ?? key;
-    }
-
-    public string? En(string table, string key) => _eng.GetValueOrDefault(table)?.GetValueOrDefault(key);
-
     /// <summary>Strip BBCode tags like [gold], [/blue], [b], [sine], etc.</summary>
     private static string StripBBCode(string text)
     {
@@ -131,18 +122,17 @@ internal class LocLookup
     }
 
     /// <summary>Return localized string for JSON output.</summary>
-    public string Bilingual(string table, string key)
+    public string GetText(string table, string key)
     {
-        var en = _eng.GetValueOrDefault(table)?.GetValueOrDefault(key) ?? key;
-        return StripBBCode(en);
+        var rawText = _eng.GetValueOrDefault(table)?.GetValueOrDefault(key) ?? key;
+        return StripBBCode(rawText);
     }
-
     // Convenience helpers using ModelId
-    public string Card(string entry) => Bilingual("cards", entry + ".title");
+    public string Card(string entry) => GetText("cards", entry + ".title");
     public string Monster(string entry)
     {
         var key = entry + ".name";
-        var result = Bilingual("monsters", key);
+        var result = GetText("monsters", key);
         // If no dedicated entry, fall back to the base segment key (e.g. DECIMILLIPEDE_SEGMENT_FRONT → DECIMILLIPEDE_SEGMENT)
         if (result == key)
         {
@@ -151,30 +141,18 @@ internal class LocLookup
             {
                 var baseEntry = entry[..lastUnderscore];
                 var baseKey = baseEntry + ".name";
-                var baseResult = Bilingual("monsters", baseKey);
+                var baseResult = GetText("monsters", baseKey);
                 if (baseResult != baseKey) return baseResult;
             }
         }
         return result;
     }
-    public string Relic(string entry) => Bilingual("relics", entry + ".title");
-    public string Potion(string entry) => Bilingual("potions", entry + ".title");
-    public string Power(string entry) => Bilingual("powers", entry + ".title");
-    public string Event(string entry) => Bilingual("events", entry + ".title");
-    public string Act(string entry) => Bilingual("acts", entry + ".title");
+    public string Relic(string entry) => GetText("relics", entry + ".title");
+    public string Potion(string entry) => GetText("potions", entry + ".title");
+    public string Power(string entry) => GetText("powers", entry + ".title");
+    public string Event(string entry) => GetText("events", entry + ".title");
+    public string Act(string entry) => GetText("acts", entry + ".title");
 
-    /// <summary>Resolve a full loc key like "TABLE.KEY.SUB" by searching all tables.</summary>
-    public string BilingualFromKey(string locKey)
-    {
-        foreach (var tableName in _eng.Keys)
-        {
-            var en = _eng.GetValueOrDefault(tableName)?.GetValueOrDefault(locKey);
-            if (en != null) return en;
-        }
-        return locKey;
-    }
-
-    public bool IsLoaded => _eng.Count > 0;
 }
 
 /// <summary>
@@ -560,7 +538,7 @@ public partial class RunSimulator
         result["type"] = card.Type.ToString();
         result["rarity"] = card.Rarity.ToString();
         if (includeUpgraded) result["upgraded"] = card.IsUpgraded;
-        result["description"] = _loc.Bilingual("cards", card.Id.Entry + ".description");
+        result["description"] = _loc.GetText("cards", card.Id.Entry + ".description");
         var stats = statsOverride ?? StatsFromBaseVars(card);
         result["stats"] = stats.Count > 0 ? stats : null;
         result["keywords"] = KeywordsToJson(card);
@@ -569,12 +547,12 @@ public partial class RunSimulator
         {
             if (card.Enchantment != null)
             {
-                result["enchantment"] = _loc.Bilingual("enchantments", card.Enchantment.Id.Entry + ".title");
+                result["enchantment"] = _loc.GetText("enchantments", card.Enchantment.Id.Entry + ".title");
                 try { if (card.Enchantment.Amount != 0) result["enchantment_amount"] = card.Enchantment.Amount; } catch { }
             }
             if (card.Affliction != null)
             {
-                result["affliction"] = _loc.Bilingual("afflictions", card.Affliction.Id.Entry + ".title");
+                result["affliction"] = _loc.GetText("afflictions", card.Affliction.Id.Entry + ".title");
                 try { if (card.Affliction.Amount != 0) result["affliction_amount"] = card.Affliction.Amount; } catch { }
             }
         }
@@ -626,7 +604,7 @@ public partial class RunSimulator
             {
                 ["cost"] = clone.EnergyCost?.GetResolved() ?? 0,
                 ["stats"] = stats.Count > 0 ? stats : null,
-                ["description"] = _loc.Bilingual("cards", card.Id.Entry + ".description"),
+                ["description"] = _loc.GetText("cards", card.Id.Entry + ".description"),
                 ["added_keywords"] = addedKws.Count > 0 ? addedKws : null,
                 ["removed_keywords"] = removedKws.Count > 0 ? removedKws : null,
             };
@@ -638,7 +616,7 @@ public partial class RunSimulator
     {
         return new Dictionary<string, object?>
         {
-            ["name"] = _loc.Bilingual("characters", (player.Character?.Id.Entry ?? "IRONCLAD") + ".title"),
+            ["name"] = _loc.GetText("characters", (player.Character?.Id.Entry ?? "IRONCLAD") + ".title"),
             ["hp"] = player.Creature?.CurrentHp ?? 0,
             ["max_hp"] = player.Creature?.MaxHp ?? 0,
             ["block"] = player.Creature?.Block ?? 0,
@@ -650,7 +628,7 @@ public partial class RunSimulator
                 return new Dictionary<string, object?>
                 {
                     ["name"] = _loc.Relic(r.Id.Entry),
-                    ["description"] = _loc.Bilingual("relics", r.Id.Entry + ".description"),
+                    ["description"] = _loc.GetText("relics", r.Id.Entry + ".description"),
                     ["vars"] = vars.Count > 0 ? vars : null,
                     ["counter"] = r.ShowCounter ? r.DisplayAmount : null,
                 };
@@ -664,7 +642,7 @@ public partial class RunSimulator
                 {
                     ["index"] = i,
                     ["name"] = _loc.Potion(p.Id.Entry),
-                    ["description"] = _loc.Bilingual("potions", p.Id.Entry + ".description"),
+                    ["description"] = _loc.GetText("potions", p.Id.Entry + ".description"),
                     ["vars"] = pvars.Count > 0 ? pvars : null,
                     ["target_type"] = p.TargetType.ToString(),
                 };
