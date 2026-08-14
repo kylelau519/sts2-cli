@@ -911,8 +911,16 @@ public partial class RunSimulator
                     return GameOverState(true);
                 }
                 RunManager.Instance.EnterNextAct().GetAwaiter().GetResult();
+                _syncCtx.Pump();
                 WaitForActionExecutor();
                 HealBetweenActs();
+                if (_runState?.Map?.StartingMapPoint != null)
+                {
+                    Log($"Entering starting Ancient map point ({_runState.Map.StartingMapPoint.coord.col},{_runState.Map.StartingMapPoint.coord.row})");
+                    RunManager.Instance.EnterMapCoord(_runState.Map.StartingMapPoint.coord).GetAwaiter().GetResult();
+                    _syncCtx.Pump();
+                    WaitForActionExecutor();
+                }
                 return DetectDecisionPoint();
             }
         }

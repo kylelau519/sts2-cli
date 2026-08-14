@@ -20,11 +20,15 @@ class _QuitRequested(Exception):
 _PILE_TYPE_ORDER = {"Attack": 0, "Skill": 1, "Power": 2}
 
 
-def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_min=1, multi_max=1):
+def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_min=1, multi_max=1,
+              redisplay_fn=None):
     """Get user input with validation. Supports meta-commands: help, map, deck, potions.
 
     If multi_select is True, accept comma-separated tokens; each must be in valid_options,
     and the count must be between multi_min and multi_max (inclusive).
+
+    redisplay_fn, if given, is called with no args to reprint the current prompt's
+    screen (event/shop/rest/etc.) in response to the "look" meta-command.
     """
     while True:
         try:
@@ -40,6 +44,7 @@ def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_
             print(f"""
   {c('Commands:', 'bold')}
     {c('help', 'cyan')}     — show this help
+    {c('look', 'cyan')}     — redisplay the current screen/options
     {c('map', 'cyan')}      — show map
     {c('deck', 'cyan')}     — show deck
     {c('potions', 'cyan')}  — show potions
@@ -61,6 +66,12 @@ def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_
     Event:   option index / {c('leave', 'yellow')} leave
     Shop:    {c('c0', 'yellow')} card / {c('r0', 'yellow')} relic / {c('p0', 'yellow')} potion / {c('rm', 'yellow')} remove / {c('leave', 'yellow')} leave
 """)
+            continue
+        if raw == "look":
+            if redisplay_fn:
+                redisplay_fn()
+            else:
+                print("  Nothing to redisplay here.")
             continue
         if raw == "deck" and state:
             p = state.get("player", {})

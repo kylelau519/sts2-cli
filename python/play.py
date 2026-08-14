@@ -151,7 +151,7 @@ class MainLoop:
         save_path = os.path.join(SAVE_DIR, fname)
         _save_game(save_path, self.character, self.actual_seed, self.action_log)
         print(f"  {c('Saved!', 'green')} {fname} ({len(self.action_log)} actions)")
-        print(f"  Load with: python3 play.py --load {os.path.relpath(save_path, ROOT)}")
+        print(f"  Load with: python3 python/play.py --load {os.path.relpath(save_path, ROOT)}")
 
     # ─── Game Setup & Lifecycle ───
 
@@ -282,7 +282,8 @@ class MainLoop:
                     pick = choices[0]
         else:
             valid = {str(i): ch for i, ch in enumerate(choices)}
-            key = get_input("Choose path [number]", set(valid.keys()), state=state)
+            key = get_input("Choose path [number]", set(valid.keys()), state=state,
+                             redisplay_fn=lambda: show_map(state, send_fn=self.send))
             pick = valid[key]
 
         return self.send({
@@ -324,7 +325,8 @@ class MainLoop:
                 self._auto_last_fingerprint = fp
                 self._auto_stuck_count = 0
         else:
-            choice = get_input("Play card [index], (e)nd turn, (p0) potion", set(valid.keys()) | {"help"}, state=state)
+            choice = get_input("Play card [index], (e)nd turn, (p0) potion", set(valid.keys()) | {"help"}, state=state,
+                                redisplay_fn=lambda: show_combat(state))
             if choice == "help":
                 print("  Enter card index, e=end turn, p0=use potion 0, draw/discard/exhaust=view pile")
                 return state
@@ -377,6 +379,7 @@ class MainLoop:
                 "Reward: card index 0–n or (s)kip — see list above",
                 set(valid.keys()),
                 state=state,
+                redisplay_fn=lambda: show_card_reward(state),
             )
 
         if choice == "s":
@@ -386,41 +389,47 @@ class MainLoop:
                              "args": {"card_index": int(choice)}})
 
     def on_bundle_select(self, state):
-        print(f"\n{'─' * 60}")
-        ctx = state.get("context", {})
-        if ctx:
-            print(f"  {c(n(ctx.get('act_name','?')), 'dim')} Floor {ctx.get('floor','?')}")
-        print(f"  {c('Choose a card pack', 'bold')}")
-        show_player(state.get("player", {}))
-        print()
+        def show():
+            print(f"\n{'─' * 60}")
+            ctx = state.get("context", {})
+            if ctx:
+                print(f"  {c(n(ctx.get('act_name','?')), 'dim')} Floor {ctx.get('floor','?')}")
+            print(f"  {c('Choose a card pack', 'bold')}")
+            show_player(state.get("player", {}))
+            print()
+            for b in bundles:
+                bidx = b["index"]
+                print(f"  {c(f'Pack [{bidx}]:', 'yellow')}")
+                if b.get("cards"):
+                    print_cards_grid(b.get("cards"), show_index=False, inline_stats=False, show_playable=False)
+
         bundles = state.get("bundles", [])
-        for b in bundles:
-            bidx = b["index"]
-            print(f"  {c(f'Pack [{bidx}]:', 'yellow')}")
-            if b.get("cards"):
-                print_cards_grid(b.get("cards"), show_index=False, inline_stats=False, show_playable=False)
+        show()
         valid = {str(b["index"]): b for b in bundles}
         if self.auto:
             choice = "0"
         else:
-            choice = get_input("Choose pack [index]", set(valid.keys()), state=state)
+            choice = get_input("Choose pack [index]", set(valid.keys()), state=state, redisplay_fn=show)
         return self.send({"cmd": "action", "action": "select_bundle",
                          "args": {"bundle_index": int(choice)}})
 
     def on_card_select(self, state):
-        print(f"\n{'─' * 60}")
-        ctx = state.get("context", {})
-        if ctx:
-            print(f"  {c(n(ctx.get('act_name','?')), 'dim')} Floor {ctx.get('floor','?')}")
         min_sel = state.get("min_select", 1)
         max_sel = state.get("max_select", 1)
-        print(f"  {c('Choose cards', 'bold')} — {card_pick_quantity_hint(min_sel, max_sel)}")
-        show_player(state.get("player", {}))
-        print()
         cards = state.get("cards", [])
-        if cards:
-            print_cards_grid(cards, show_index=True, inline_stats=False, show_playable=False)
 
+        def show():
+            print(f"\n{'─' * 60}")
+            ctx = state.get("context", {})
+            if ctx:
+                print(f"  {c(n(ctx.get('act_name','?')), 'dim')} Floor {ctx.get('floor','?')}")
+            print(f"  {c('Choose cards', 'bold')} — {card_pick_quantity_hint(min_sel, max_sel)}")
+            show_player(state.get("player", {}))
+            print()
+            if cards:
+                print_cards_grid(cards, show_index=True, inline_stats=False, show_playable=False)
+
+        show()
         valid = {str(cd["index"]): cd for cd in cards}
         if min_sel == 0:
             valid["s"] = None
@@ -444,6 +453,7 @@ class MainLoop:
                 multi_select=multi,
                 multi_min=min_sel,
                 multi_max=max_sel,
+                redisplay_fn=show,
             )
 
         if choice == "s":
@@ -472,7 +482,8 @@ class MainLoop:
         if self.auto:
             choice = "leave"
         else:
-            choice = get_input("Buy [index/r0/p0/rm] or (leave)", state=state)
+            choice = get_input("Buy [index/r0/p0/rm] or (leave)", state=state,
+                                redisplay_fn=lambda: show_shop(state))
 
         if choice == "leave":
             return self.send({"cmd": "action", "action": "leave_room"})
@@ -502,7 +513,8 @@ class MainLoop:
             pick = (heal if hp < mhp * 0.7 else smith) or (heal or (enabled[0] if enabled else None))
             choice = str(pick["index"]) if pick else "0"
         else:
-            choice = get_input("Choose option [index]", set(valid.keys()), state=state)
+            choice = get_input("Choose option [index]", set(valid.keys()), state=state,
+                                redisplay_fn=lambda: show_rest_site(state))
 
         next_state = self.send({"cmd": "action", "action": "choose_option",
                                 "args": {"option_index": int(choice)}})
@@ -527,7 +539,8 @@ class MainLoop:
         if self.auto:
             choice = str(unlocked[0]["index"]) if unlocked else "leave"
         else:
-            choice = get_input("Choose option [index] or (leave)", set(valid.keys()), state=state)
+            choice = get_input("Choose option [index] or (leave)", set(valid.keys()), state=state,
+                                redisplay_fn=lambda: show_event(state))
 
         if choice == "leave":
             next_state = self.send({"cmd": "action", "action": "leave_room"})

@@ -245,7 +245,7 @@ public partial class RunSimulator
         }
         else
         {
-            // Starting point — pick from starting row
+            // Starting point — only the StartingMapPoint (Ancient) is available before entering the act
             var startPoint = map.StartingMapPoint;
             choices = new List<Dictionary<string, object?>>
             {
@@ -256,19 +256,6 @@ public partial class RunSimulator
                     ["type"] = startPoint.PointType.ToString(),
                 }
             };
-            // Add all children of start point as well since we can travel to them
-            if (startPoint.Children != null)
-            {
-                foreach (var child in startPoint.Children)
-                {
-                    choices.Add(new Dictionary<string, object?>
-                    {
-                        ["col"] = (int)child.coord.col,
-                        ["row"] = (int)child.coord.row,
-                        ["type"] = child.PointType.ToString(),
-                    });
-                }
-            }
         }
 
         return new Dictionary<string, object?>
@@ -635,6 +622,13 @@ public partial class RunSimulator
             _syncCtx.Pump();
             WaitForActionExecutor();
             HealBetweenActs();
+            if (_runState?.Map?.StartingMapPoint != null)
+            {
+                Log($"Entering starting Ancient map point ({_runState.Map.StartingMapPoint.coord.col},{_runState.Map.StartingMapPoint.coord.row})");
+                RunManager.Instance.EnterMapCoord(_runState.Map.StartingMapPoint.coord).GetAwaiter().GetResult();
+                _syncCtx.Pump();
+                WaitForActionExecutor();
+            }
             return DetectDecisionPoint();
         }
 
