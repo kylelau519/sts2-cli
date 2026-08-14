@@ -1268,24 +1268,24 @@ public partial class RunSimulator
             }
             catch (Exception ex) { Console.Error.WriteLine($"[WARN] Bundle patch: {ex.Message}"); }
 
-            // Patch Neutralize.OnPlay to avoid NullRef in DamageCmd.Attack().Execute()
-            try
-            {
-                var neutralizeType = typeof(MegaCrit.Sts2.Core.Models.Cards.Neutralize);
-                var neutralizeOnPlay = neutralizeType.GetMethod("OnPlay",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                if (neutralizeOnPlay != null)
-                {
-                    var neutPrefix = typeof(LocPatches).GetMethod(nameof(LocPatches.NeutralizePrefix),
-                        System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-                    if (neutPrefix != null)
-                    {
-                        harmony.Patch(neutralizeOnPlay, new HarmonyMethod(neutPrefix));
-                        Console.Error.WriteLine("[INFO] Patched Neutralize.OnPlay");
-                    }
-                }
-            }
-            catch (Exception ex) { Console.Error.WriteLine($"[WARN] Neutralize patch: {ex.Message}"); }
+            // Neutralize patch detached for testing:
+            // try
+            // {
+            //     var neutralizeType = typeof(MegaCrit.Sts2.Core.Models.Cards.Neutralize);
+            //     var neutralizeOnPlay = neutralizeType.GetMethod("OnPlay",
+            //         System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            //     if (neutralizeOnPlay != null)
+            //     {
+            //         var neutPrefix = typeof(LocPatches).GetMethod(nameof(LocPatches.NeutralizePrefix),
+            //             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+            //         if (neutPrefix != null)
+            //         {
+            //             harmony.Patch(neutralizeOnPlay, new HarmonyMethod(neutPrefix));
+            //             Console.Error.WriteLine("[INFO] Patched Neutralize.OnPlay");
+            //         }
+            //     }
+            // }
+            // catch (Exception ex) { Console.Error.WriteLine($"[WARN] Neutralize patch: {ex.Message}"); }
 
             // Patch HasEntry to always return true
             PatchMethod(harmony, typeof(LocTable), "HasEntry", nameof(LocPatches.HasEntryPrefix));
