@@ -688,32 +688,15 @@ if __name__ == "__main__":
                        help="Ascension level (0-10)")
     parser.add_argument("--no-log", action="store_true",
                        help="Disable game logging")
-    parser.add_argument("--load", type=str, default=None,
-                       help="Load a save file (action replay)")
-    parser.add_argument("--saves", action="store_true",
-                       help="List available saves and exit")
-    parser.add_argument("--save-info", type=str, default=None,
-                       help="Show info from a save file (provide path)")
-    parser.add_argument("--continue", dest="continue_save", type=str, default=None,
-                       help="Continue playing from a save file (provide path)")
+    save_group = parser.add_mutually_exclusive_group()
+    save_group.add_argument("--load", type=str, help="Load a specific save file")
+    save_group.add_argument("--saves", action="store_true",
+                            help="List all saved games")
+    save_group.add_argument("--save-info", type=str,
+                            help="Show details for a save file")
+    save_group.add_argument("--continue", dest="continue_save",
+                        action="store_true", help="Continue the latest save")
     args = parser.parse_args()
-
-    # Mutual exclusion: conflicting flags
-    if args.load is not None:
-        if args.saves:
-            parser.error("Cannot combine --load with --saves")
-        if args.save_info is not None:
-            parser.error("Cannot combine --load with --save-info")
-        if args.continue_save is not None:
-            parser.error("Cannot combine --load with --continue")
-    if args.saves:
-        if args.save_info is not None:
-            parser.error("Cannot combine --saves with --save-info")
-        if args.continue_save is not None:
-            parser.error("Cannot combine --saves with --continue")
-    if args.save_info is not None:
-        if args.continue_save is not None:
-            parser.error("Cannot combine --save-info with --continue")
 
     if args.save_info is not None:
         p = args.save_info
