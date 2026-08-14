@@ -506,7 +506,14 @@ public partial class RunSimulator
     private static Dictionary<string, object?> StatsFromBaseVars(CardModel card)
     {
         var stats = new Dictionary<string, object?>();
-        try { foreach (var dv in card.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
+        if (card?.DynamicVars?.Values != null)
+        {
+            foreach (var dv in card.DynamicVars.Values)
+            {
+                if (dv != null && !string.IsNullOrEmpty(dv.Name))
+                    stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue;
+            }
+        }
         return stats;
     }
 
@@ -548,12 +555,12 @@ public partial class RunSimulator
             if (card.Enchantment != null)
             {
                 result["enchantment"] = _loc.GetText("enchantments", card.Enchantment.Id.Entry + ".title");
-                try { if (card.Enchantment.Amount != 0) result["enchantment_amount"] = card.Enchantment.Amount; } catch { }
+                if (card.Enchantment.Amount != 0) result["enchantment_amount"] = card.Enchantment.Amount;
             }
             if (card.Affliction != null)
             {
                 result["affliction"] = _loc.GetText("afflictions", card.Affliction.Id.Entry + ".title");
-                try { if (card.Affliction.Amount != 0) result["affliction_amount"] = card.Affliction.Amount; } catch { }
+                if (card.Affliction.Amount != 0) result["affliction_amount"] = card.Affliction.Amount;
             }
         }
         return result;
@@ -578,38 +585,36 @@ public partial class RunSimulator
     private Dictionary<string, object?>? GetUpgradedInfo(CardModel card)
     {
         if (!card.IsUpgradable) return null;
-        try
+        var canonical = ModelDb.GetById<CardModel>(card.Id);
+        if (canonical == null) return null;
+
+        var clone = canonical.ToMutable();
+        // Apply existing upgrades first
+        for (int i = 0; i < card.CurrentUpgradeLevel; i++)
         {
-            var clone = ModelDb.GetById<CardModel>(card.Id).ToMutable();
-            // Apply existing upgrades first
-            for (int i = 0; i < card.CurrentUpgradeLevel; i++)
-            {
-                clone.UpgradeInternal();
-                clone.FinalizeUpgradeInternal();
-            }
-            // Apply one more upgrade
             clone.UpgradeInternal();
             clone.FinalizeUpgradeInternal();
-
-            var stats = new Dictionary<string, object?>();
-            try { foreach (var dv in clone.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-
-            // Compare keywords before/after upgrade
-            var oldKws = card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToHashSet() ?? new();
-            var newKws = clone.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToHashSet() ?? new();
-            var addedKws = newKws.Except(oldKws).ToList();
-            var removedKws = oldKws.Except(newKws).ToList();
-
-            return new Dictionary<string, object?>
-            {
-                ["cost"] = clone.EnergyCost?.GetResolved() ?? 0,
-                ["stats"] = stats.Count > 0 ? stats : null,
-                ["description"] = _loc.GetText("cards", card.Id.Entry + ".description"),
-                ["added_keywords"] = addedKws.Count > 0 ? addedKws : null,
-                ["removed_keywords"] = removedKws.Count > 0 ? removedKws : null,
-            };
         }
-        catch { return null; }
+        // Apply one more upgrade
+        clone.UpgradeInternal();
+        clone.FinalizeUpgradeInternal();
+
+        var stats = StatsFromBaseVars(clone);
+
+        // Compare keywords before/after upgrade
+        var oldKws = card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToHashSet() ?? new();
+        var newKws = clone.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToHashSet() ?? new();
+        var addedKws = newKws.Except(oldKws).ToList();
+        var removedKws = oldKws.Except(newKws).ToList();
+
+        return new Dictionary<string, object?>
+        {
+            ["cost"] = clone.EnergyCost?.GetResolved() ?? 0,
+            ["stats"] = stats.Count > 0 ? stats : null,
+            ["description"] = _loc.GetText("cards", card.Id.Entry + ".description"),
+            ["added_keywords"] = addedKws.Count > 0 ? addedKws : null,
+            ["removed_keywords"] = removedKws.Count > 0 ? removedKws : null,
+        };
     }
 
     private Dictionary<string, object?> PlayerSummary(Player player)
@@ -621,10 +626,17 @@ public partial class RunSimulator
             ["max_hp"] = player.Creature?.MaxHp ?? 0,
             ["block"] = player.Creature?.Block ?? 0,
             ["gold"] = player.Gold,
-            ["relics"] = player.Relics?.Select(r =>
+            ["relics"] = player.Relics?.Where(r => r != null).Select(r =>
             {
                 var vars = new Dictionary<string, object?>();
-                try { foreach (var dv in r.DynamicVars.Values) vars[dv.Name] = (int)dv.BaseValue; } catch { }
+                if (r?.DynamicVars?.Values != null)
+                {
+                    foreach (var dv in r.DynamicVars.Values)
+                    {
+                        if (dv != null && !string.IsNullOrEmpty(dv.Name))
+                            vars[dv.Name] = (int)dv.BaseValue;
+                    }
+                }
                 return new Dictionary<string, object?>
                 {
                     ["name"] = _loc.Relic(r.Id.Entry),
@@ -637,7 +649,14 @@ public partial class RunSimulator
             {
                 if (p == null) return null;
                 var pvars = new Dictionary<string, object?>();
-                try { foreach (var dv in p.DynamicVars.Values) pvars[dv.Name] = (int)dv.BaseValue; } catch { }
+                if (p.DynamicVars?.Values != null)
+                {
+                    foreach (var dv in p.DynamicVars.Values)
+                    {
+                        if (dv != null && !string.IsNullOrEmpty(dv.Name))
+                            pvars[dv.Name] = (int)dv.BaseValue;
+                    }
+                }
                 return new Dictionary<string, object?>
                 {
                     ["index"] = i,
@@ -669,22 +688,18 @@ public partial class RunSimulator
         };
 
         // Boss encounter info — use BossEncounter?.Id?.Entry
-        try
+        var bossIdEntry = _runState.Act?.BossEncounter?.Id?.Entry;
+        if (!string.IsNullOrEmpty(bossIdEntry))
         {
-            var bossIdEntry = _runState.Act?.BossEncounter?.Id?.Entry;
-            if (!string.IsNullOrEmpty(bossIdEntry))
+            var monsterKey = bossIdEntry.EndsWith("_BOSS") ? bossIdEntry[..^5] : bossIdEntry;
+            // Handle special mappings
+            if (monsterKey == "THE_KIN") monsterKey = "KIN_PRIEST";
+            ctx["boss"] = new Dictionary<string, object?>
             {
-                var monsterKey = bossIdEntry.EndsWith("_BOSS") ? bossIdEntry[..^5] : bossIdEntry;
-                // Handle special mappings
-                if (monsterKey == "THE_KIN") monsterKey = "KIN_PRIEST";
-                ctx["boss"] = new Dictionary<string, object?>
-                {
-                    ["id"] = bossIdEntry,
-                    ["name"] = _loc.Monster(monsterKey),
-                };
-            }
+                ["id"] = bossIdEntry,
+                ["name"] = _loc.Monster(monsterKey),
+            };
         }
-        catch { }
 
         return ctx;
     }

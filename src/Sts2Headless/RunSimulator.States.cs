@@ -306,22 +306,27 @@ public partial class RunSimulator
             // resets PreviewValue to BaseValue, and only damage/block/calculated vars override it,
             // so reading PreviewValue uniformly is safe. Issues #65 #69 #70 #71 #74 #75.
             var stats = new Dictionary<string, object?>();
-            try
+            if (c.DynamicVars != null)
             {
-                c.DynamicVars.ClearPreview();
-                c.UpdateDynamicVarPreview(
-                    MegaCrit.Sts2.Core.Entities.Cards.CardPreviewMode.Normal,
-                    c.CurrentTarget, c.DynamicVars);
-                foreach (var dv in c.DynamicVars.Values)
+                try
                 {
-                    stats[dv.Name.ToLowerInvariant()] = (int)dv.PreviewValue;
+                    c.DynamicVars.ClearPreview();
+                    c.UpdateDynamicVarPreview(
+                        MegaCrit.Sts2.Core.Entities.Cards.CardPreviewMode.Normal,
+                        c.CurrentTarget, c.DynamicVars);
+                    foreach (var dv in c.DynamicVars.Values)
+                    {
+                        stats[dv.Name.ToLowerInvariant()] = (int)dv.PreviewValue;
+                    }
                 }
-                // Restore the live card to base state. UpdateDynamicVarPreview mutates the
-                // card's preview (and for self-cost cards like Momentum Strike, leaving it in
-                // preview state corrupts the subsequent PlayCardAction — card stays in hand).
-                c.DynamicVars.ClearPreview();
+                finally
+                {
+                    // Restore the live card to base state. UpdateDynamicVarPreview mutates the
+                    // card's preview (and for self-cost cards like Momentum Strike, leaving it in
+                    // preview state corrupts the subsequent PlayCardAction — card stays in hand).
+                    c.DynamicVars.ClearPreview();
+                }
             }
-            catch { }
 
             // Per-target resolved damage for attack cards: the scalar `stats` above use the
             // card's CurrentTarget, but a single value can't capture target-specific modifiers
@@ -330,7 +335,8 @@ public partial class RunSimulator
             // path the game uses to draw multi-target previews, and read the resolved vars.
             List<Dictionary<string, object?>>? damageByTarget = null;
             if (c.Type == CardType.Attack && aliveEnemiesForTargeting.Count > 0
-                && (c.TargetType == TargetType.AnyEnemy || c.TargetType == TargetType.AllEnemies))
+                && (c.TargetType == TargetType.AnyEnemy || c.TargetType == TargetType.AllEnemies)
+                && c.DynamicVars != null)
             {
                 damageByTarget = new List<Dictionary<string, object?>>();
                 for (int ti = 0; ti < aliveEnemiesForTargeting.Count; ti++)
@@ -376,7 +382,6 @@ public partial class RunSimulator
                         }
                         damageByTarget.Add(row);
                     }
-                    catch { }
                     finally { c.DynamicVars.ClearPreview(); }
                 }
             }
@@ -408,12 +413,12 @@ public partial class RunSimulator
             if (c.Enchantment != null)
             {
                 cardInfo["enchantment"] = _loc.GetText("enchantments", c.Enchantment.Id.Entry + ".title");
-                try { if (c.Enchantment.Amount != 0) cardInfo["enchantment_amount"] = c.Enchantment.Amount; } catch { }
+                if (c.Enchantment.Amount != 0) cardInfo["enchantment_amount"] = c.Enchantment.Amount;
             }
             if (c.Affliction != null)
             {
                 cardInfo["affliction"] = _loc.GetText("afflictions", c.Affliction.Id.Entry + ".title");
-                try { if (c.Affliction.Amount != 0) cardInfo["affliction_amount"] = c.Affliction.Amount; } catch { }
+                if (c.Affliction.Amount != 0) cardInfo["affliction_amount"] = c.Affliction.Amount;
             }
             if (damageByTarget != null && damageByTarget.Count > 0)
                 cardInfo["damage_by_target"] = damageByTarget;
@@ -428,45 +433,39 @@ public partial class RunSimulator
             {
                 // Extract detailed intent info
                 var intents = new List<Dictionary<string, object?>>();
-                try
+                var nextIntents = e.Monster?.NextMove?.Intents;
+                if (nextIntents != null)
                 {
-                    if (e.Monster?.NextMove?.Intents != null)
+                    foreach (var intent in nextIntents)
                     {
-                        foreach (var intent in e.Monster.NextMove.Intents)
+                        if (intent == null) continue;
+                        var intentInfo = new Dictionary<string, object?>
                         {
-                            var intentInfo = new Dictionary<string, object?>
+                            ["type"] = intent.IntentType.ToString(),
+                        };
+                        // Get damage for attack intents
+                        if (intent is MegaCrit.Sts2.Core.MonsterMoves.Intents.AttackIntent atk && playerCreatures != null)
+                        {
+                            // For multi-hit attacks, expose per-hit `damage` (matching the
+                            // game's intent description, which pairs GetSingleDamage with
+                            // Repeat) plus an explicit `total_damage`. Reporting the total in
+                            // `damage` while also reporting `hits` let clients compute
+                            // damage*hits and double-count incoming damage (#67).
+                            var hits = atk.Repeats;
+                            if (hits > 1)
                             {
-                                ["type"] = intent.IntentType.ToString(),
-                            };
-                            // Get damage for attack intents
-                            if (intent is MegaCrit.Sts2.Core.MonsterMoves.Intents.AttackIntent atk && playerCreatures != null)
-                            {
-                                try
-                                {
-                                    // For multi-hit attacks, expose per-hit `damage` (matching the
-                                    // game's intent description, which pairs GetSingleDamage with
-                                    // Repeat) plus an explicit `total_damage`. Reporting the total in
-                                    // `damage` while also reporting `hits` let clients compute
-                                    // damage*hits and double-count incoming damage (#67).
-                                    var hits = atk.Repeats;
-                                    if (hits > 1)
-                                    {
-                                        intentInfo["damage"] = atk.GetSingleDamage(playerCreatures, e);
-                                        intentInfo["hits"] = hits;
-                                        intentInfo["total_damage"] = atk.GetTotalDamage(playerCreatures, e);
-                                    }
-                                    else
-                                    {
-                                        intentInfo["damage"] = atk.GetTotalDamage(playerCreatures, e);
-                                    }
-                                }
-                                catch { }
+                                intentInfo["damage"] = atk.GetSingleDamage(playerCreatures, e);
+                                intentInfo["hits"] = hits;
+                                intentInfo["total_damage"] = atk.GetTotalDamage(playerCreatures, e);
                             }
-                            intents.Add(intentInfo);
+                            else
+                            {
+                                intentInfo["damage"] = atk.GetTotalDamage(playerCreatures, e);
+                            }
                         }
+                        intents.Add(intentInfo);
                     }
                 }
-                catch { }
 
                 // Enemy powers
                 var ePowers = e.Powers?.Select(pw => new Dictionary<string, object?>
@@ -591,8 +590,8 @@ public partial class RunSimulator
                     if (reward is GoldReward || reward is MegaCrit.Sts2.Core.Rewards.RelicReward
                         || reward is MegaCrit.Sts2.Core.Rewards.PotionReward)
                     {
-                        try { reward.SelectUnsynchronized().GetAwaiter().GetResult(); _syncCtx.Pump(); }
-                        catch (Exception ex) { Log($"Auto-collect reward: {ex.Message}"); }
+                        reward.SelectUnsynchronized().GetAwaiter().GetResult();
+                        _syncCtx.Pump();
                     }
                     else if (reward is CardReward cr)
                     {
@@ -609,7 +608,10 @@ public partial class RunSimulator
 
                 _pendingRewards = null;
             }
-            catch (Exception ex) { Log($"Generate rewards: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                Log($"Reward generation failed: {ex.Message}");
+            }
         }
 
         // No more pending rewards — proceed
@@ -629,14 +631,10 @@ public partial class RunSimulator
                 return GameOverState(true);
             }
             Log("Boss defeated, entering next act");
-            try
-            {
-                RunManager.Instance.EnterNextAct().GetAwaiter().GetResult();
-                _syncCtx.Pump();
-                WaitForActionExecutor();
-                HealBetweenActs();
-            }
-            catch (Exception ex) { Log($"EnterNextAct: {ex.Message}"); }
+            RunManager.Instance.EnterNextAct().GetAwaiter().GetResult();
+            _syncCtx.Pump();
+            WaitForActionExecutor();
+            HealBetweenActs();
             return DetectDecisionPoint();
         }
 
@@ -777,34 +775,36 @@ public partial class RunSimulator
 
                 // Extract vars: try event's own DynamicVars first, then relic
                 Dictionary<string, object?>? optVars = null;
-                try
+                // Event's DynamicVars (covers Gold, HpLoss, Heal, etc.)
+                if (localEvent.DynamicVars?.Values != null)
                 {
-                    // Event's DynamicVars (covers Gold, HpLoss, Heal, etc.)
-                    if (localEvent.DynamicVars?.Values != null)
+                    optVars = new Dictionary<string, object?>();
+                    foreach (var dv in localEvent.DynamicVars.Values)
                     {
-                        optVars = new Dictionary<string, object?>();
-                        foreach (var dv in localEvent.DynamicVars.Values)
+                        if (dv != null && !string.IsNullOrEmpty(dv.Name))
                             optVars[dv.Name] = (int)dv.BaseValue;
                     }
                 }
-                catch { }
+
                 // Also try relic vars (for Neow options)
                 if (opt.TextKey != null)
                 {
-                    try
+                    var parts = opt.TextKey.Split('.');
+                    var optionId = parts.Length > 0 ? parts[^1] : opt.TextKey;
+                    var relicModel = ModelDb.GetById<RelicModel>(new ModelId("RELIC", optionId));
+                    if (relicModel != null)
                     {
-                        var parts = opt.TextKey.Split('.');
-                        var optionId = parts.Length > 0 ? parts[^1] : opt.TextKey;
-                        var relicModel = ModelDb.GetById<RelicModel>(new ModelId("RELIC", optionId));
-                        if (relicModel != null)
+                        var mutable = relicModel.ToMutable();
+                        if (mutable.DynamicVars?.Values != null)
                         {
                             optVars ??= new Dictionary<string, object?>();
-                            var mutable = relicModel.ToMutable();
                             foreach (var dv in mutable.DynamicVars.Values)
-                                optVars[dv.Name] = (int)dv.BaseValue;
+                            {
+                                if (dv != null && !string.IsNullOrEmpty(dv.Name))
+                                    optVars[dv.Name] = (int)dv.BaseValue;
+                            }
                         }
                     }
-                    catch { }
                 }
 
                 // `RandomCard` (Slippery Bridge / Overcome) carries a *deck index*, but the
@@ -814,13 +814,9 @@ public partial class RunSimulator
                 // a transform-target pool, not the deck, so a generic rule would mis-resolve them.
                 if (optVars != null && optVars.TryGetValue("RandomCard", out var rcVal) && rcVal is int rcIdx)
                 {
-                    try
-                    {
-                        var deck = _runState?.Players?[0]?.Deck?.Cards;
-                        if (deck != null && rcIdx >= 0 && rcIdx < deck.Count && deck[rcIdx] != null)
-                            optVars["RandomCard"] = _loc.Card(deck[rcIdx].Id.Entry);
-                    }
-                    catch { }
+                    var deck = _runState?.Players?[0]?.Deck?.Cards;
+                    if (deck != null && rcIdx >= 0 && rcIdx < deck.Count && deck[rcIdx] != null)
+                        optVars["RandomCard"] = _loc.Card(deck[rcIdx].Id.Entry);
                 }
 
                 return new Dictionary<string, object?>
@@ -914,10 +910,11 @@ public partial class RunSimulator
                     // The shop entry's card can have uninitialized DynamicVars (stats: null while
                     // after_upgrade is populated, #68). Read base stats from a fresh ModelDb clone
                     // at the card's current upgrade level, like GetUpgradedInfo.
-                    Dictionary<string, object?> stats;
-                    try
+                    Dictionary<string, object?> stats = new();
+                    var cardCanonical = ModelDb.GetById<CardModel>(card.Id);
+                    if (cardCanonical != null)
                     {
-                        var fresh = ModelDb.GetById<CardModel>(card.Id).ToMutable();
+                        var fresh = cardCanonical.ToMutable();
                         for (int u = 0; u < card.CurrentUpgradeLevel; u++)
                         {
                             fresh.UpgradeInternal();
@@ -925,7 +922,6 @@ public partial class RunSimulator
                         }
                         stats = StatsFromBaseVars(fresh);
                     }
-                    catch { stats = new(); }
                     cardInfo = CardToJson(card, statsOverride: stats, includeId: false);
                     cardInfo["card_cost"] = cardInfo["cost"];   // energy cost, renamed to avoid colliding with shop price
                 }

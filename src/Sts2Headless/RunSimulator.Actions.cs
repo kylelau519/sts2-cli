@@ -396,15 +396,11 @@ public partial class RunSimulator
         Log($"Selected card reward: {card.GetType().Name}");
 
         // Add card to deck
-        try
-        {
-            MegaCrit.Sts2.Core.Commands.CardPileCmd
-                .Add(card, MegaCrit.Sts2.Core.Entities.Cards.PileType.Deck)
-                .GetAwaiter().GetResult();
-            _syncCtx.Pump();
-            RunManager.Instance.RewardSynchronizer.SyncLocalObtainedCard(card);
-        }
-        catch (Exception ex) { Log($"Add card to deck: {ex.Message}"); }
+        MegaCrit.Sts2.Core.Commands.CardPileCmd
+            .Add(card, MegaCrit.Sts2.Core.Entities.Cards.PileType.Deck)
+            .GetAwaiter().GetResult();
+        _syncCtx.Pump();
+        RunManager.Instance.RewardSynchronizer.SyncLocalObtainedCard(card);
 
         _pendingCardReward = null;
         // Check if more rewards pending
@@ -448,13 +444,9 @@ public partial class RunSimulator
         if (!entry.IsStocked) return Error("Card already purchased");
         if (player.Gold < entry.Cost) return Error("Not enough gold");
 
-        try
-        {
-            entry.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()).GetAwaiter().GetResult();
-            _syncCtx.Pump();
-            Log($"Bought card: {entry.CreationResult?.Card?.GetType().Name ?? "?"} for {entry.Cost}g");
-        }
-        catch (Exception ex) { return Error($"Buy card failed: {ex.Message}"); }
+        entry.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()).GetAwaiter().GetResult();
+        _syncCtx.Pump();
+        Log($"Bought card: {entry.CreationResult?.Card?.GetType().Name ?? "?"} for {entry.Cost}g");
 
         return DetectDecisionPoint();
     }
@@ -474,37 +466,33 @@ public partial class RunSimulator
         if (!entry.IsStocked) return Error("Relic already purchased");
         if (player.Gold < entry.Cost) return Error("Not enough gold");
 
-        try
+        // The pickup effect can open a card_select (e.g. KIFUDA → enchant up to 3 with
+        // Adroit, #80). Run the purchase on a background task and yield as soon as a
+        // pending selection appears so the caller can resolve it; the background task
+        // continues once the selector's TCS is fed by select_cards.
+        var inv = merchantRoom.GetLocalInventory();
+        var task = Task.Run(() => entry.OnTryPurchaseWrapper(inv));
+        for (int i = 0; i < 100; i++)
         {
-            // The pickup effect can open a card_select (e.g. KIFUDA → enchant up to 3 with
-            // Adroit, #80). Run the purchase on a background task and yield as soon as a
-            // pending selection appears so the caller can resolve it; the background task
-            // continues once the selector's TCS is fed by select_cards.
-            var inv = merchantRoom.GetLocalInventory();
-            var task = Task.Run(() => entry.OnTryPurchaseWrapper(inv));
-            for (int i = 0; i < 100; i++)
-            {
-                _syncCtx.Pump();
-                if (_cardSelector.HasPending || _cardSelector.HasPendingReward) break;
-                if (_pendingBundles != null) break;
-                if (task.IsCompleted) break;
-                Thread.Sleep(10);
-            }
-            if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null)
-            {
-                Log($"Buy relic {entry.Model.GetType().Name}: yielded for pending selection");
-                return DetectDecisionPoint();
-            }
-            var swRelic = System.Diagnostics.Stopwatch.StartNew();
-            while (!task.IsCompleted && swRelic.ElapsedMilliseconds < 3000)
-            {
-                _syncCtx.Pump();
-                Thread.Sleep(10);
-            }
             _syncCtx.Pump();
-            Log($"Bought relic: {entry.Model.GetType().Name} for {entry.Cost}g");
+            if (_cardSelector.HasPending || _cardSelector.HasPendingReward) break;
+            if (_pendingBundles != null) break;
+            if (task.IsCompleted) break;
+            Thread.Sleep(10);
         }
-        catch (Exception ex) { return Error($"Buy relic failed: {ex.Message}"); }
+        if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null)
+        {
+            Log($"Buy relic {entry.Model.GetType().Name}: yielded for pending selection");
+            return DetectDecisionPoint();
+        }
+        var swRelic = System.Diagnostics.Stopwatch.StartNew();
+        while (!task.IsCompleted && swRelic.ElapsedMilliseconds < 3000)
+        {
+            _syncCtx.Pump();
+            Thread.Sleep(10);
+        }
+        _syncCtx.Pump();
+        Log($"Bought relic: {entry.Model.GetType().Name} for {entry.Cost}g");
 
         return DetectDecisionPoint();
     }
@@ -524,17 +512,9 @@ public partial class RunSimulator
         if (!entry.IsStocked) return Error("Potion already purchased");
         if (player.Gold < entry.Cost) return Error("Not enough gold");
 
-        try
-        {
-            entry.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()).GetAwaiter().GetResult();
-            _syncCtx.Pump();
-            Log($"Bought potion: {entry.Model.GetType().Name} for {entry.Cost}g");
-        }
-        catch (Exception ex)
-        {
-            // Potion purchase sometimes NullRefs in headless (missing potion slot UI)
-            Log($"Buy potion failed: {ex.Message}");
-        }
+        entry.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()).GetAwaiter().GetResult();
+        _syncCtx.Pump();
+        Log($"Bought potion: {entry.Model.GetType().Name} for {entry.Cost}g");
 
         return DetectDecisionPoint();
     }
@@ -548,32 +528,28 @@ public partial class RunSimulator
         if (removal == null) return Error("No card removal available");
         if (player.Gold < removal.Cost) return Error("Not enough gold");
 
-        try
+        // Run on background thread so card selection can pause (same pattern as event options)
+        var task = Task.Run(() => removal.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()));
+        for (int i = 0; i < 100; i++)
         {
-            // Run on background thread so card selection can pause (same pattern as event options)
-            var task = Task.Run(() => removal.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()));
-            for (int i = 0; i < 100; i++)
-            {
-                _syncCtx.Pump();
-                if (_cardSelector.HasPending) break;
-                if (task.IsCompleted) break;
-                Thread.Sleep(10);
-            }
-            if (_cardSelector.HasPending)
-            {
-                WaitForActionExecutor();
-                return DetectDecisionPoint();
-            }
-            var swCard = System.Diagnostics.Stopwatch.StartNew();
-            while (!task.IsCompleted && swCard.ElapsedMilliseconds < 3000)
-            {
-                _syncCtx.Pump();
-                Thread.Sleep(10);
-            }
             _syncCtx.Pump();
-            Log($"Removed card for {removal.Cost}g");
+            if (_cardSelector.HasPending) break;
+            if (task.IsCompleted) break;
+            Thread.Sleep(10);
         }
-        catch (Exception ex) { return Error($"Remove card failed: {ex.Message}"); }
+        if (_cardSelector.HasPending)
+        {
+            WaitForActionExecutor();
+            return DetectDecisionPoint();
+        }
+        var swCard = System.Diagnostics.Stopwatch.StartNew();
+        while (!task.IsCompleted && swCard.ElapsedMilliseconds < 3000)
+        {
+            _syncCtx.Pump();
+            Thread.Sleep(10);
+        }
+        _syncCtx.Pump();
+        Log($"Removed card for {removal.Cost}g");
 
         return DetectDecisionPoint();
     }
