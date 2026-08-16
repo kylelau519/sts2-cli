@@ -188,10 +188,14 @@ public partial class RunSimulator
     private IReadOnlyList<IReadOnlyList<CardModel>>? _pendingBundles;
     private TaskCompletionSource<IEnumerable<CardModel>>? _pendingBundleTcs;
 
+    private static bool _cardSelectorRegistered;
+    private static bool _combatEventsRegistered;
+
     public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null)
     {
         try
         {
+            CleanUp();
             EnsureModelDbInitialized();
 
             var player = CreatePlayer(character);
@@ -229,8 +233,12 @@ public partial class RunSimulator
             Log("Run launched");
 
             // Register event handlers for combat turn transitions
-            CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
-            CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+            if (!_combatEventsRegistered)
+            {
+                CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
+                CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+                _combatEventsRegistered = true;
+            }
 
             // Finalize starting relics
             RunManager.Instance.FinalizeStartingRelics().GetAwaiter().GetResult();
@@ -241,7 +249,11 @@ public partial class RunSimulator
             Log("Entered Act 0");
 
             // Register card selector for cards that need player choice
-            CardSelectCmd.UseSelector(_cardSelector);
+            if (!_cardSelectorRegistered)
+            {
+                CardSelectCmd.UseSelector(_cardSelector);
+                _cardSelectorRegistered = true;
+            }
             LocPatches._bundleSimRef = this;
 
             // Now we should be at the map — detect decision point

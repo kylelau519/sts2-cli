@@ -19,6 +19,7 @@ public partial class RunSimulator
     {
         try
         {
+            CleanUp();
             EnsureModelDbInitialized();
 
             Log("Loading save file...");
@@ -43,9 +44,17 @@ public partial class RunSimulator
             RunManager.Instance.SetUpSavedSingleplayer(_runState, save);
             LocalContext.NetId = netService.NetId;
 
-            CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
-            CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
-            CardSelectCmd.UseSelector(_cardSelector);
+            if (!_combatEventsRegistered)
+            {
+                CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
+                CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+                _combatEventsRegistered = true;
+            }
+            if (!_cardSelectorRegistered)
+            {
+                CardSelectCmd.UseSelector(_cardSelector);
+                _cardSelectorRegistered = true;
+            }
             LocPatches._bundleSimRef = this;
 
             var savedRoom = _runState.CurrentRoom;
