@@ -1,5 +1,7 @@
 using System.Reflection;
 using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Combat.History;
+using MegaCrit.Sts2.Core.Combat.History.Entries;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Events;
@@ -601,6 +603,50 @@ public partial class RunSimulator
             ["description"] = _loc.GetText("cards", card.Id.Entry + ".description"),
             ["added_keywords"] = addedKws.Count > 0 ? addedKws : null,
             ["removed_keywords"] = removedKws.Count > 0 ? removedKws : null,
+        };
+    }
+
+    /// <summary>Per-creature counts of combat history events, both for the current turn and the
+    /// whole combat so far. This mirrors how the engine itself computes scaling for cards like
+    /// Supermassive (cards created), Spite (damage taken this turn), and Murder (cards drawn) --
+    /// by counting typed CombatHistory entries at preview time, because no dedicated counter
+    /// field exists anywhere on PlayerCombatState. Exposing the counts here lets a client see
+    /// the scaling inputs even when the scaling card isn't currently in hand.</summary>
+    private static Dictionary<string, object?> HistoryCounts(Creature? creature, ICombatState? combatState)
+    {
+        if (creature == null) return new();
+        var entries = CombatManager.Instance.History.Entries;
+
+        Dictionary<string, object?> CountsOf<T>(Func<T, bool> matches) where T : CombatHistoryEntry
+        {
+            var list = entries.OfType<T>().Where(matches).ToList();
+            return new Dictionary<string, object?>
+            {
+                ["this_turn"] = list.Count(e => e.HappenedThisTurn(combatState)),
+                ["this_combat"] = list.Count,
+            };
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["block_gained"] = CountsOf<BlockGainedEntry>(e => e.Actor == creature),
+            ["card_afflicted"] = CountsOf<CardAfflictedEntry>(e => e.Actor == creature),
+            ["card_discarded"] = CountsOf<CardDiscardedEntry>(e => e.Actor == creature),
+            ["card_drawn"] = CountsOf<CardDrawnEntry>(e => e.Actor == creature),
+            ["card_exhausted"] = CountsOf<CardExhaustedEntry>(e => e.Actor == creature),
+            ["card_generated"] = CountsOf<CardGeneratedEntry>(e => e.Actor == creature),
+            ["card_played"] = CountsOf<CardPlayFinishedEntry>(e => e.Actor == creature),
+            ["creature_attacked"] = CountsOf<CreatureAttackedEntry>(e => e.Actor == creature),
+            ["damage_received"] = CountsOf<DamageReceivedEntry>(e => e.Receiver == creature),
+            ["damage_dealt"] = CountsOf<DamageReceivedEntry>(e => e.Dealer == creature),
+            ["energy_spent"] = CountsOf<EnergySpentEntry>(e => e.Actor == creature),
+            ["monster_move_performed"] = CountsOf<MonsterPerformedMoveEntry>(e => e.Actor == creature),
+            ["orb_channeled"] = CountsOf<OrbChanneledEntry>(e => e.Actor == creature),
+            ["potion_used"] = CountsOf<PotionUsedEntry>(e => e.Actor == creature),
+            ["power_received"] = CountsOf<PowerReceivedEntry>(e => e.Actor == creature),
+            ["power_applied"] = CountsOf<PowerReceivedEntry>(e => e.Applier == creature),
+            ["stars_modified"] = CountsOf<StarsModifiedEntry>(e => e.Actor == creature),
+            ["summoned"] = CountsOf<SummonedEntry>(e => e.Actor == creature),
         };
     }
 

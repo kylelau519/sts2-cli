@@ -1,6 +1,7 @@
 // RunSimulator partial — Decision point detection and state builders
 
 using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Combat.History.Entries;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.CardRewardAlternatives;
@@ -384,6 +385,7 @@ public partial class RunSimulator
                 ["type"] = c.Type.ToString(),
                 ["rarity"] = c.Rarity.ToString(),
                 ["can_play"] = c.CanPlay(out _, out _),
+                ["upgraded"] = c.IsUpgraded,
                 ["target_type"] = c.TargetType.ToString(),
                 ["stats"] = stats.Count > 0 ? stats : null,
                 ["description"] = _loc.GetText("cards", c.Id.Entry + ".description"),
@@ -457,6 +459,7 @@ public partial class RunSimulator
                 // Enemy powers
                 var ePowers = e.Powers?.Select(pw => new Dictionary<string, object?>
                 {
+                    ["id"] = pw.Id.Entry,
                     ["name"] = _loc.Power(pw.Id.Entry),
                     ["description"] = _loc.GetText("powers", pw.Id.Entry + ".description"),
                     ["amount"] = pw.Amount,
@@ -478,6 +481,7 @@ public partial class RunSimulator
         // Player powers/buffs
         var playerPowers = player.Creature?.Powers?.Select(pw => new Dictionary<string, object?>
         {
+            ["id"] = pw.Id.Entry,
             ["name"] = _loc.Power(pw.Id.Entry),
             ["description"] = _loc.GetText("powers", pw.Id.Entry + ".description"),
             ["amount"] = pw.Amount,
@@ -547,6 +551,36 @@ public partial class RunSimulator
         catch (Exception ex)
         {
             Log($"Character-specific data: {ex.Message}");
+        }
+
+        // Combat history counts (see HistoryCounts doc comment): exposes the scaling inputs for
+        // cards like Supermassive/Spite/Murder even when those cards aren't currently in hand.
+        try
+        {
+            var playerHistory = HistoryCounts(player.Creature, combatState);
+            var historyEntries = CombatManager.Instance.History.Entries;
+            playerHistory["card_created_by_player"] = new Dictionary<string, object?>
+            {
+                ["this_turn"] = historyEntries.OfType<CardGeneratedEntry>()
+                    .Count(ge => ge.Creator == player && ge.HappenedThisTurn(combatState)),
+                ["this_combat"] = historyEntries.OfType<CardGeneratedEntry>()
+                    .Count(ge => ge.Creator == player),
+            };
+
+            result["history"] = new Dictionary<string, object?>
+            {
+                ["player"] = playerHistory,
+                ["enemies"] = aliveEnemiesForTargeting.Select((c, i) =>
+                {
+                    var h = new Dictionary<string, object?> { ["index"] = i };
+                    foreach (var kv in HistoryCounts(c, combatState)) h[kv.Key] = kv.Value;
+                    return h;
+                }).ToList(),
+            };
+        }
+        catch (Exception ex)
+        {
+            Log($"Combat history counts: {ex.Message}");
         }
 
         return result;
