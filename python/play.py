@@ -15,8 +15,127 @@ from datetime import datetime
 import json
 import os
 import random
+import re
 import subprocess
 import sys
+
+
+def choice_to_action(decision, choice, state):
+    """Convert a user choice string at the current decision point into an action command dictionary."""
+    if not decision or not choice:
+        return None
+
+    if decision == "map_select":
+        choices = state.get("choices", [])
+        valid = {str(i): ch for i, ch in enumerate(choices)}
+        if choice in valid:
+            pick = valid[choice]
+            return {
+                "cmd": "action",
+                "action": "select_map_node",
+                "args": {"col": pick["col"], "row": pick["row"]},
+            }
+        return None
+
+    if decision == "combat_play":
+        if choice == "e":
+            return {"cmd": "action", "action": "end_turn"}
+        if choice.startswith("p") and choice[1:].isdigit():
+            pidx = int(choice[1:])
+            args = {"potion_index": pidx}
+            pots = state.get("player", {}).get("potions", [])
+            pot_meta = next((p for p in pots if p and p.get("index") == pidx), None)
+            enemies = state.get("enemies", [])
+            if pot_meta and pot_meta.get("target_type") == "AnyEnemy" and enemies:
+                args["target_index"] = enemies[0]["index"]
+            return {"cmd": "action", "action": "use_potion", "args": args}
+        if choice.isdigit():
+            card_idx = int(choice)
+            hand = state.get("hand", [])
+            card = next((c for c in hand if c.get("index") == card_idx), None)
+            if card:
+                args = {"card_index": card["index"]}
+                enemies = state.get("enemies", [])
+                if card.get("target_type") == "AnyEnemy" and enemies:
+                    args["target_index"] = enemies[0]["index"]
+                return {"cmd": "action", "action": "play_card", "args": args}
+        return None
+
+    if decision == "card_reward":
+        if choice == "s":
+            return {"cmd": "action", "action": "skip_card_reward"}
+        if choice.isdigit():
+            return {
+                "cmd": "action",
+                "action": "select_card_reward",
+                "args": {"card_index": int(choice)},
+            }
+        return None
+
+    if decision == "bundle_select":
+        if choice.isdigit():
+            return {
+                "cmd": "action",
+                "action": "select_bundle",
+                "args": {"bundle_index": int(choice)},
+            }
+        return None
+
+    if decision == "card_select":
+        if choice == "s":
+            return {"cmd": "action", "action": "skip_select"}
+        return {
+            "cmd": "action",
+            "action": "select_cards",
+            "args": {"indices": choice},
+        }
+
+    if decision == "shop":
+        if choice == "leave":
+            return {"cmd": "action", "action": "leave_room"}
+        if choice == "rm":
+            return {"cmd": "action", "action": "remove_card"}
+        if choice.startswith("r") and choice[1:].isdigit():
+            return {
+                "cmd": "action",
+                "action": "buy_relic",
+                "args": {"relic_index": int(choice[1:])},
+            }
+        if choice.startswith("p") and choice[1:].isdigit():
+            return {
+                "cmd": "action",
+                "action": "buy_potion",
+                "args": {"potion_index": int(choice[1:])},
+            }
+        if choice.isdigit():
+            return {
+                "cmd": "action",
+                "action": "buy_card",
+                "args": {"card_index": int(choice)},
+            }
+        return None
+
+    if decision == "rest_site":
+        if choice.isdigit():
+            return {
+                "cmd": "action",
+                "action": "choose_option",
+                "args": {"option_index": int(choice)},
+            }
+        return None
+
+    if decision == "event_choice":
+        if choice == "leave":
+            return {"cmd": "action", "action": "leave_room"}
+        if choice.isdigit():
+            return {
+                "cmd": "action",
+                "action": "choose_option",
+                "args": {"option_index": int(choice)},
+            }
+        return None
+
+    return None
 
 from display import (
     CARD_KW_PREFIX_ORDER,
@@ -145,14 +264,47 @@ class MainLoop:
         self.proc.stdin.flush()
         return self.read()
 
-    def do_save(self):
-        """Save action replay JSON file."""
+    def do_save(self, state=None):
+        """Save action replay JSON file with systematic naming."""
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = f"{self.character}_{self.actual_seed}_{ts}.json"
+        if state and state.get("context"):
+            ctx = state.get("context", {})
+            act = ctx.get("act", 1)
+            floor = ctx.get("floor", 0)
+            dec = state.get("decision", "save")
+            fname = f"{self.character}_{self.actual_seed}_A{act}_F{floor}_{dec}_{ts}.json"
+        else:
+            fname = f"{self.character}_{self.actual_seed}_{ts}.json"
+
         save_path = os.path.join(SAVE_DIR, fname)
         _save_game(save_path, self.character, self.actual_seed, self.action_log)
         print(f"  {c('Saved!', 'green')} {fname} ({len(self.action_log)} actions)")
-        print(f"  Load with: python3 python/play.py --load {os.path.relpath(save_path, ROOT)}")
+        print(f"  Load with: {c(f'load saves/{fname}', 'cyan')}")
+
+    def do_branch(self, choice_arg, state=None):
+        """Create a save branch with the specified choice appended to actions."""
+        if not state:
+            print("  Branch failed: no active decision state.")
+            return
+
+        dec = state.get("decision", "")
+        action_cmd = choice_to_action(dec, choice_arg, state)
+        if not action_cmd:
+            print(f"  {c('Invalid branch choice for current state:', 'red')} {choice_arg}")
+            return
+
+        branched_actions = list(self.action_log) + [action_cmd]
+        ctx = state.get("context", {})
+        act = ctx.get("act", 1)
+        floor = ctx.get("floor", 0)
+        clean_choice = re.sub(r'[^a-zA-Z0-9_-]', '_', choice_arg)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"{self.character}_{self.actual_seed}_A{act}_F{floor}_{dec}_branch_{clean_choice}_{ts}.json"
+        save_path = os.path.join(SAVE_DIR, fname)
+
+        _save_game(save_path, self.character, self.actual_seed, branched_actions)
+        print(f"  {c('Branched save created!', 'green')} {fname} ({len(branched_actions)} actions)")
+        print(f"  Load anytime with: {c(f'load saves/{fname}', 'cyan')}")
 
     # ─── Game Setup & Lifecycle ───
 
@@ -174,6 +326,7 @@ class MainLoop:
 
         get_input._send = self.send
         get_input._save_fn = self.do_save
+        get_input._branch_fn = self.do_branch
 
         ready = self.read()
         if not ready:

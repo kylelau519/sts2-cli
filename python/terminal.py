@@ -62,6 +62,7 @@ def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_
     {c('discard', 'cyan')}      — show discard pile (in combat)
     {c('exhaust', 'cyan')}      — show exhaust pile (in combat)
     {c('load [path]', 'cyan')}  — load a save file directly without restarting
+    {c('branch [choice]', 'cyan')} — save a branch with choice executed on load
     {c('quit', 'cyan')}         — quit
     {c('abandon', 'cyan')}      — abandon run (forfeit)
     {c('save', 'cyan')}         — save game
@@ -141,9 +142,19 @@ def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_
             continue
         if raw == "save":
             if hasattr(get_input, '_save_fn'):
-                get_input._save_fn()
+                get_input._save_fn(state)
             else:
                 print("  Save not available.")
+            continue
+        if raw.startswith("branch "):
+            arg = line[7:].strip()
+            if not arg:
+                print("  Usage: branch <choice> (e.g. branch 1, branch leave, branch e)")
+                continue
+            if hasattr(get_input, '_branch_fn'):
+                get_input._branch_fn(arg, state)
+            else:
+                print("  Branch not available.")
             continue
         if raw == "saves":
             saves = _list_saves()
