@@ -82,6 +82,7 @@ from save_load import (
 )
 from terminal import (
     get_input,
+    _LoadRequested,
     _QuitRequested,
 )
 
@@ -225,6 +226,46 @@ class MainLoop:
             print(f"Character: {self.character}  Seed: {self.actual_seed}{asc_str}")
         print(f"Type {c('help', 'cyan')} for available commands.\n")
 
+        return state
+
+    def load_in_place(self, load_path):
+        """Load and replay save file into running process without restarting."""
+        self.character, self.actual_seed, self.replay_actions = _load_game(load_path)
+        print(f"\n{c('Loading save...', 'yellow')} {os.path.basename(load_path)}")
+        print(f"  Character: {self.character}  Seed: {self.actual_seed}  Actions: {len(self.replay_actions)}")
+
+        if self.logger:
+            self.logger.close()
+        self.logger = GameLogger(self.character, self.actual_seed, enabled=self.log_enabled)
+        self.load_path = load_path
+        self.native_save_path = None
+        self.action_log = []
+
+        state = self.send({
+            "cmd": "start_run",
+            "character": self.character,
+            "seed": self.actual_seed,
+            "ascension": self.ascension,
+        }, record=False)
+        if state and state.get("type") == "error":
+            print(f"  {c('Error:', 'red')} {state.get('message', '?')}")
+            return None
+
+        if self.replay_actions:
+            total = len(self.replay_actions)
+            for i, cmd in enumerate(self.replay_actions):
+                state = self.send(cmd, record=True)
+                print(f"\r  Replaying... ({i+1}/{total})", end="", flush=True)
+                if not state:
+                    print(f"\n{c('Replay failed at action', 'red')} {i+1}")
+                    return None
+            print(f"\r  {c('Replay complete!', 'green')} ({total}/{total})" + " " * 20)
+            print()
+
+        print(f"\n{c('Slay the Spire 2 — Headless CLI', 'bold')}")
+        asc_str = f"  Ascension: {self.ascension}" if self.ascension > 0 else ""
+        print(f"Character: {self.character}  Seed: {self.actual_seed}{asc_str}")
+        print(f"Type {c('help', 'cyan')} for available commands.\n")
         return state
 
     # ─── Decision Handlers ───
@@ -641,23 +682,30 @@ class MainLoop:
                 return self.restart_requested
 
             while state:
-                if state.get("type") == "error":
-                    print(f"  {c('Error:', 'red')} {state.get('message', '?')}")
-                    state = self.send({"cmd": "action", "action": "proceed"})
-                    continue
+                try:
+                    if state.get("type") == "error":
+                        print(f"  {c('Error:', 'red')} {state.get('message', '?')}")
+                        state = self.send({"cmd": "action", "action": "proceed"})
+                        continue
 
-                dec = state.get("decision", "")
+                    dec = state.get("decision", "")
 
-                if dec == "game_over":
-                    self.on_game_over(state)
-                    break
+                    if dec == "game_over":
+                        self.on_game_over(state)
+                        break
 
-                handler = self.handlers.get(dec)
-                if handler:
-                    state = handler(state)
-                else:
-                    print(f"  Unknown state: {dec}")
-                    state = self.send({"cmd": "action", "action": "proceed"})
+                    handler = self.handlers.get(dec)
+                    if handler:
+                        state = handler(state)
+                    else:
+                        print(f"  Unknown state: {dec}")
+                        state = self.send({"cmd": "action", "action": "proceed"})
+                except _LoadRequested as req:
+                    new_state = self.load_in_place(req.path)
+                    if new_state:
+                        state = new_state
+                    else:
+                        print("  Resuming current game state.")
 
         except _QuitRequested:
             self.handle_quit()

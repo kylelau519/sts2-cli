@@ -25,3 +25,20 @@ def test_quit_save_defaults_to_save_dir(monkeypatch):
     assert path is not None
     assert path.startswith(play.SAVE_DIR)
     assert path.endswith(".save")
+
+
+def test_get_input_load_command(monkeypatch, tmp_path):
+    test_save = tmp_path / "quick_load.json"
+    test_save.write_text('{"character": "Ironclad", "seed": "123", "actions": []}', encoding="utf-8")
+
+    from terminal import get_input, _LoadRequested
+
+    inputs = iter([f"load {test_save}"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+
+    try:
+        get_input("Choose option")
+        assert False, "Expected _LoadRequested exception"
+    except _LoadRequested as e:
+        assert e.path == str(test_save)
+

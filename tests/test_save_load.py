@@ -46,3 +46,35 @@ def test_load_pre_neow_save_preserves_neow_choice(tmp_path):
         assert state["decision"] == "event_choice"
     finally:
         game.close()
+
+
+def test_load_save_in_same_process(tmp_path):
+    save1 = tmp_path / "run1.save"
+    save2 = tmp_path / "run2.save"
+
+    game = Game()
+    try:
+        # Start run 1 and save
+        state1 = game.start(seed="sameproc1", character="Ironclad")
+        state1 = game.skip_neow(state1)
+        res1 = game.send({"cmd": "write_continue_save", "path": str(save1)})
+        assert res1["success"] is True
+
+        # Start run 2 on the same simulator process without closing
+        state2 = game.start(seed="sameproc2", character="Silent")
+        assert state2["decision"] == "event_choice"
+        res2 = game.send({"cmd": "write_continue_save", "path": str(save2)})
+        assert res2["success"] is True
+
+        # Load run 1 back into the same process without restarting
+        loaded1 = game.send({"cmd": "load_save", "path": str(save1)})
+        assert loaded1["decision"] == "map_select"
+        assert loaded1["player"]["character_id"] == "CHARACTER.IRONCLAD"
+
+        # Load run 2 back into the same process without restarting
+        loaded2 = game.send({"cmd": "load_save", "path": str(save2)})
+        assert loaded2["decision"] == "event_choice"
+        assert loaded2["player"]["character_id"] == "CHARACTER.SILENT"
+    finally:
+        game.close()
+

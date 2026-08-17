@@ -1,4 +1,4 @@
-"""Terminal interaction and input handling for sts2-cli."""
+import os
 
 from display import (
     c,
@@ -10,6 +10,7 @@ from display import (
     show_player,
     _render_map,
 )
+from installation import ROOT
 from save_load import _list_saves
 
 
@@ -17,12 +18,18 @@ class _QuitRequested(Exception):
     pass
 
 
+class _LoadRequested(Exception):
+    def __init__(self, path):
+        self.path = path
+        super().__init__(f"Load requested: {path}")
+
+
 _PILE_TYPE_ORDER = {"Attack": 0, "Skill": 1, "Power": 2}
 
 
 def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_min=1, multi_max=1,
               redisplay_fn=None):
-    """Get user input with validation. Supports meta-commands: help, map, deck, potions.
+    """Get user input with validation. Supports meta-commands: help, map, deck, potions, load.
 
     If multi_select is True, accept comma-separated tokens; each must be in valid_options,
     and the count must be between multi_min and multi_max (inclusive).
@@ -32,30 +39,34 @@ def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_
     """
     while True:
         try:
-            raw = input(f"\n{c('>', 'green')} {prompt}: ").strip().lower()
+            line = input(f"\n{c('>', 'green')} {prompt}: ").strip()
         except (EOFError, KeyboardInterrupt):
             raise _QuitRequested()
 
-        if not raw:
+        if not line:
             continue
+
+        raw = line.lower()
 
         # Meta-commands available at any prompt
         if raw == "help":
             print(f"""
   {c('Commands:', 'bold')}
-    {c('help', 'cyan')}     — show this help
-    {c('look', 'cyan')}     — redisplay the current screen/options
-    {c('map', 'cyan')}      — show map
-    {c('deck', 'cyan')}     — show deck
-    {c('potions', 'cyan')}  — show potions
-    {c('relics', 'cyan')}   — show relics
-    {c('draw', 'cyan')}     — show draw pile (in combat)
-    {c('discard', 'cyan')}  — show discard pile (in combat)
-    {c('exhaust', 'cyan')}  — show exhaust pile (in combat)
-    {c('quit', 'cyan')}     — quit
-    {c('abandon', 'cyan')}  — abandon run (forfeit)
-    {c('save', 'cyan')}     — save game
-    {c('saves', 'cyan')}    — list saves
+    {c('help', 'cyan')}         — show this help
+    {c('look', 'cyan')}         — redisplay the current screen/options
+    {c('map', 'cyan')}          — show map
+    {c('deck', 'cyan')}         — show deck
+    {c('potions', 'cyan')}      — show potions
+    {c('relics', 'cyan')}       — show relics
+    {c('draw', 'cyan')}         — show draw pile (in combat)
+    {c('discard', 'cyan')}      — show discard pile (in combat)
+    {c('exhaust', 'cyan')}      — show exhaust pile (in combat)
+    {c('load [path]', 'cyan')}  — load a save file directly without restarting
+    {c('quit', 'cyan')}         — quit
+    {c('abandon', 'cyan')}      — abandon run (forfeit)
+    {c('save', 'cyan')}         — save game
+    {c('saves', 'cyan')}        — list saves
+
 
   {c('Actions:', 'bold')}
     Map:     path number (0, 1, 2)
@@ -144,6 +155,14 @@ def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_
             else:
                 print("  No saves found.")
             continue
+        if raw.startswith("load "):
+            p = line[5:].strip()
+            if not os.path.isabs(p):
+                p = os.path.join(ROOT, p)
+            if not os.path.isfile(p):
+                print(f"  Save file not found: {line[5:].strip()}")
+                continue
+            raise _LoadRequested(p)
         if raw == "quit":
             raise _QuitRequested()
         if raw == "abandon":
