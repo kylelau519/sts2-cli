@@ -1,5 +1,20 @@
 """Typed models for sts2-cli's decision-point JSON.
 
+Usage:
+    import json
+    from schema.models import parse_decision, CombatPlay
+
+    decision = parse_decision(json.loads(line))
+    if isinstance(decision, CombatPlay):
+        for card in decision.hand:
+            if card.can_play:
+                ...
+
+`parse_decision` dispatches on the "decision" field and raises pydantic.ValidationError on a
+shape mismatch -- that error is the drift signal: if sts2-cli's JSON changes, this is where it
+shows up, right at the point of capture rather than silently inside training data. Re-read the
+relevant RunSimulator.cs method and update the model when it does.
+
 Source: sts2-cli commit 0f344ab (2026-08-16), src/Sts2Headless/RunSimulator.cs and
 RunSimulator.States.cs. Adds history counts, hand-card `upgraded`, and power `id` (see
 CombatHistorySummary/HistoryCounts docstrings below) -- not yet reflected in
@@ -493,3 +508,11 @@ Decision = Annotated[
     ],
     Field(discriminator="decision"),
 ]
+
+_decision_adapter = TypeAdapter(Decision)
+
+
+def parse_decision(raw: dict) -> Decision:
+    """Parse a raw decision-point dict (already json.loads'd) into its typed model, dispatching
+    on the "decision" field. Raises pydantic.ValidationError on a shape mismatch."""
+    return _decision_adapter.validate_python(raw)
