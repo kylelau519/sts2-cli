@@ -34,12 +34,6 @@ def n(obj):
     """Extract display name."""
     return str(obj) if obj is not None else "?"
 
-
-def short_n(obj):
-    """Short name only."""
-    return str(obj) if obj is not None else "?"
-
-
 def desc(obj):
     """Extract description, strip BBCode tags, clean SmartFormat vars."""
     if obj and isinstance(obj, str):
@@ -92,11 +86,6 @@ def desc(obj):
 CARD_KW_SUFFIX_ORDER = ("Exhaust", "Unplayable", "Eternal")
 # Before description as [A/B/C]
 CARD_KW_PREFIX_ORDER = ("Innate", "Ethereal", "Retain", "Sly")
-
-SPECIAL_VARS = {
-    "energyprefix": "E",
-    "energy": "Energy",
-}
 
 
 def resolve_template(text, vars_dict):
@@ -328,16 +317,6 @@ def _format_upgrade_preview(stats, aug, current_cost=None):
     return parts
 
 
-def print_card_detail_extension(card, indent="      "):
-    """Description (with [prefix/keywords]) + upgrade preview; indent matches title row spacing."""
-    for line in card_description_display_lines(card):
-        if line:
-            print(f"{indent}{line}")
-    stats = card.get("stats") or {}
-    aug_parts = _format_upgrade_preview(stats, card.get("after_upgrade"), card.get("cost"))
-    if aug_parts:
-        print(f"{indent}{c('upgrade:', 'dim')} {', '.join(aug_parts)}")
-
 
 def print_cards_grid(cards, show_index=False, inline_stats=False, show_playable=False, osty=None, is_shop=False, player_gold=0):
     c_console = Console()
@@ -554,24 +533,24 @@ def show_combat(state):
             elif itype in ("Buff", "Heal"):
                 intent_parts.append(c(f"⬆{itype}", "magenta"))
             elif itype == "Debuff":
-                intent_parts.append(c("⬇Debuff", "yellow"))
+                intent_parts.append(c("⬇ Debuff", "yellow"))
             elif itype == "DebuffStrong":
-                intent_parts.append(c("⬇Strong", "yellow"))
+                intent_parts.append(c("⬇ Strong", "yellow"))
             elif itype in ("CardDebuff", "StatusCard"):
-                intent_parts.append(c("⬇Cards", "yellow"))
+                intent_parts.append(c("⬇ Cards", "yellow"))
             elif itype == "DeathBlow":
                 if dmg is not None:
                     intent_parts.append(c(f"💀{dmg}", "red"))
                 else:
-                    intent_parts.append(c("💀KILL", "red"))
+                    intent_parts.append(c("💀 KILL", "red"))
             elif itype == "Escape":
-                intent_parts.append(c("🏃Escape", "dim"))
+                intent_parts.append(c("🏃 Escape", "dim"))
             elif itype == "Summon":
-                intent_parts.append(c("📢Summon", "magenta"))
+                intent_parts.append(c("📢 Summon", "magenta"))
             elif itype == "Sleep":
-                intent_parts.append(c("💤Sleep", "dim"))
+                intent_parts.append(c("💤 Sleep", "dim"))
             elif itype == "Stun":
-                intent_parts.append(c("⚡Stun", "yellow"))
+                intent_parts.append(c("⚡ Stun", "yellow"))
             elif itype == "Hidden":
                 intent_parts.append(c("? ???", "dim"))
             elif itype:

@@ -106,14 +106,6 @@ def _copy_dlls(game_dir):
         shutil.copy2(sts2, backup)
 
 
-def _patch_dll():
-    """Apply IL patches to sts2.dll using setup.sh (requires Mono.Cecil via dotnet)."""
-    setup_sh = os.path.join(ROOT, "setup.sh")
-    if not os.path.isfile(setup_sh):
-        print("  ⚠ setup.sh not found, skipping IL patch")
-        return
-    # Run just the patching part via setup.sh
-    subprocess.run(["bash", setup_sh], cwd=ROOT)
 
 
 def _build():

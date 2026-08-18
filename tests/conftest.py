@@ -64,9 +64,6 @@ class Game:
         cmd = {"cmd": "enter_room", "type": room_type, **kwargs}
         return self.send(cmd)
 
-    def set_draw_order(self, cards):
-        return self.send({"cmd": "set_draw_order", "cards": cards})
-
     def close(self):
         try:
             self.proc.stdin.write('{"cmd":"quit"}\n')

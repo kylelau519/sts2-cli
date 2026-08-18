@@ -141,7 +141,6 @@ from display import (
     CARD_KW_PREFIX_ORDER,
     CARD_KW_SUFFIX_ORDER,
     COLORS,
-    SPECIAL_VARS,
     bar,
     c,
     card_desc,
@@ -154,11 +153,9 @@ from display import (
     loc_resolve,
     n,
     potion_str,
-    print_card_detail_extension,
     print_cards_grid,
     relic_str,
     resolve_template,
-    short_n,
     show_card_reward,
     show_combat,
     show_event,
@@ -185,7 +182,6 @@ from installation import (
     _find_dotnet,
     _find_game_dir,
     _is_wsl,
-    _patch_dll,
 )
 from save_load import (
     SAVE_DIR,
