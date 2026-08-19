@@ -45,6 +45,7 @@ class Sts2Session:
         self.character: str | None = None
         self.seed: str | None = None
         self.ascension: int = 0
+        self._map_cache: dict | None = None
         self._read_raw()  # consume the initial "ready" line
 
     def _read_raw(self) -> dict:
@@ -63,6 +64,7 @@ class Sts2Session:
 
     def start(self, character: str, seed: str, ascension: int = 0) -> Decision:
         self.character, self.seed, self.ascension = character, seed, ascension
+        self._map_cache = None
         raw = self._send_raw({
             "cmd": "start_run", "character": character, "seed": seed, "ascension": ascension,
         })
@@ -90,7 +92,23 @@ class Sts2Session:
         decision = _to_decision(raw)
         if self.logger:
             self.logger.log_state(decision)
+        # select_map_node is the only action that moves current_coord -- and it's also what
+        # carries a run from one act's boss into the next act's freshly generated map, so this
+        # one invalidation rule covers both "moved a floor" and "map is a wholly different act"
+        # without needing to key the cache by act separately.
+        if action_name == "select_map_node":
+            self._map_cache = None
         return decision
+
+    def get_map(self) -> dict:
+        """The full act map (all rows, boss, current position) -- not a Decision, since it's
+        a side query rather than a response to an action. Callers wanting to plan a route
+        further than the one-hop `choices` list on a map_select decision go through this.
+        Cached: rows/boss are static for the whole act and current_coord only moves on
+        select_map_node (see step()), so repeat calls between floors are free."""
+        if self._map_cache is None:
+            self._map_cache = self._send_raw({"cmd": "get_map"})
+        return self._map_cache
 
     def save(self, path: str) -> None:
         _save_game(path, self.character, self.seed, self.action_log)
