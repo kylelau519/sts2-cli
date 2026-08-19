@@ -346,8 +346,12 @@ class CardSelect(Loose):
     Fires for upgrade/remove/transform picks and mid-shop/rest-site sub-selections, including
     effects that restrict the pool to a card type or pile (e.g. "choose a Skill card from your
     hand/discard/draw").
-    
-    This is incomplete because the info it offers cannot handle enough situation like in combat info.
+
+    The interface alone can't tell two selects apart -- True Grit's exhaust-select and Wish's
+    deck-tutor-select produce the identical shape (same cards-list/min/max/player fields), even
+    though a policy needs to treat them completely differently. source_category/source_id/
+    prompt_table/prompt_key (below) exist to close that gap; see their docstrings for what each
+    one covers and when it's None.
     """
 
     type: Literal["decision"] = "decision"
@@ -356,6 +360,10 @@ class CardSelect(Loose):
     min_select: int
     max_select: int
     player: PlayerSummary
+    source_category: str | None = None
+    source_id: str | None = None
+    prompt_table: str | None = None
+    prompt_key: str | None = None
 
 
 # --- bundle_select (inline, RunSimulator.cs:1807-1839 -- Scroll Boxes) ---

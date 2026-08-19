@@ -823,6 +823,11 @@ public partial class RunSimulator
         // moves (e.g. BygoneEffigy.WakeMove) NRE in headless and break the enemy turn.
         PatchTalkCmd();
 
+        // Patch CardSelectCmd.FromXxx to capture the prefs/source it drops before calling
+        // ICardSelector.GetSelectedCards, so HeadlessCardSelector can report *why* a
+        // card_select fired (e.g. True Grit's exhaust-select vs Wish's deck-tutor-select).
+        PatchCardSelectContext();
+
         // Initialize localization system (needed for events, cards, etc.)
         InitLocManager();
 
@@ -986,6 +991,109 @@ public partial class RunSimulator
         }
     }
 
+    /// <summary>
+    /// Patches every CardSelectCmd.FromXxx overload that takes a CardSelectorPrefs and/or an
+    /// AbstractModel `source` -- covers card-, relic-, power-, and potion-triggered selects
+    /// (FromHand/FromCombatPile/FromDeck*), plus the rest-site/card-upgrade path
+    /// (FromHandForUpgrade, source only, no prefs in the headless branch). Not patched:
+    /// FromChooseACardScreen (obscure mod-support path, not exercised by any known card/relic)
+    /// and FromChooseABundleScreen (bundle_select is unambiguous already -- Scroll Boxes only).
+    /// </summary>
+    private static void PatchCardSelectContext()
+    {
+        try
+        {
+            var harmony = new Harmony("sts2headless.cardselectcontext");
+            var type = typeof(CardSelectCmd);
+            const System.Reflection.BindingFlags flags =
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static;
+
+            var prefsAndSourcePrefix = new HarmonyMethod(
+                typeof(CardSelectContextPatches).GetMethod(nameof(CardSelectContextPatches.PrefsAndSourcePrefix), flags));
+            var prefsOnlyPrefix = new HarmonyMethod(
+                typeof(CardSelectContextPatches).GetMethod(nameof(CardSelectContextPatches.PrefsOnlyPrefix), flags));
+            var sourceOnlyPrefix = new HarmonyMethod(
+                typeof(CardSelectContextPatches).GetMethod(nameof(CardSelectContextPatches.SourceOnlyPrefix), flags));
+
+            int patched = 0;
+            void Patch(string methodName, HarmonyMethod prefix, params Type[] paramTypes)
+            {
+                var method = type.GetMethod(methodName, flags, binder: null, types: paramTypes, modifiers: null);
+                if (method == null)
+                {
+                    Console.Error.WriteLine($"[WARN] CardSelectCmd.{methodName}({string.Join(", ", paramTypes.Select(t => t.Name))}) not found -- skipping cause-capture patch");
+                    return;
+                }
+                harmony.Patch(method, prefix);
+                patched++;
+            }
+
+            // FromHand carries both prefs and source; FromHandForDiscard delegates straight
+            // into FromHand with the same args, so patching FromHand covers it too.
+            Patch(nameof(CardSelectCmd.FromHand), prefsAndSourcePrefix,
+                typeof(PlayerChoiceContext), typeof(Player), typeof(CardSelectorPrefs), typeof(Func<CardModel, bool>), typeof(AbstractModel));
+
+            // FromHandForUpgrade's headless branch calls Selector.GetSelectedCards directly
+            // with no CardSelectorPrefs built at all -- source is the only signal available.
+            Patch(nameof(CardSelectCmd.FromHandForUpgrade), sourceOnlyPrefix,
+                typeof(PlayerChoiceContext), typeof(Player), typeof(AbstractModel));
+
+            Patch(nameof(CardSelectCmd.FromSimpleGridForRewards), prefsOnlyPrefix,
+                typeof(PlayerChoiceContext), typeof(List<CardCreationResult>), typeof(Player), typeof(CardSelectorPrefs));
+            Patch(nameof(CardSelectCmd.FromSimpleGrid), prefsOnlyPrefix,
+                typeof(PlayerChoiceContext), typeof(IReadOnlyList<CardModel>), typeof(Player), typeof(CardSelectorPrefs));
+            Patch(nameof(CardSelectCmd.FromCombatPile), prefsOnlyPrefix,
+                typeof(PlayerChoiceContext), typeof(CardPile), typeof(Player), typeof(CardSelectorPrefs));
+            Patch(nameof(CardSelectCmd.FromCombatPile), prefsOnlyPrefix,
+                typeof(PlayerChoiceContext), typeof(CardPile), typeof(Player), typeof(CardSelectorPrefs), typeof(Func<CardModel, bool>));
+            Patch(nameof(CardSelectCmd.FromDeckForUpgrade), prefsOnlyPrefix,
+                typeof(Player), typeof(CardSelectorPrefs));
+            Patch(nameof(CardSelectCmd.FromDeckForTransformation), prefsOnlyPrefix,
+                typeof(Player), typeof(CardSelectorPrefs), typeof(Func<CardModel, CardTransformation>));
+            Patch(nameof(CardSelectCmd.FromDeckForEnchantment), prefsOnlyPrefix,
+                typeof(Player), typeof(EnchantmentModel), typeof(int), typeof(CardSelectorPrefs));
+            Patch(nameof(CardSelectCmd.FromDeckForEnchantment), prefsOnlyPrefix,
+                typeof(Player), typeof(EnchantmentModel), typeof(int), typeof(Func<CardModel, bool>), typeof(CardSelectorPrefs));
+            Patch(nameof(CardSelectCmd.FromDeckForEnchantment), prefsOnlyPrefix,
+                typeof(IReadOnlyList<CardModel>), typeof(EnchantmentModel), typeof(int), typeof(CardSelectorPrefs));
+            // FromDeckForRemoval delegates straight into FromDeckGeneric with the same prefs --
+            // patching FromDeckGeneric covers it too.
+            Patch(nameof(CardSelectCmd.FromDeckGeneric), prefsOnlyPrefix,
+                typeof(Player), typeof(CardSelectorPrefs), typeof(Func<CardModel, bool>), typeof(Func<CardModel, int>));
+
+            Console.Error.WriteLine($"[INFO] Patched {patched} CardSelectCmd overload(s) for card_select cause-capture");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[WARN] Failed to patch CardSelectCmd for cause-capture: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Harmony prefixes for PatchCardSelectContext -- parameter names must match CardSelectCmd's
+    /// exactly (`prefs`, `source`), since Harmony injects prefix args by name, not position.
+    /// </summary>
+    internal static class CardSelectContextPatches
+    {
+        public static void PrefsAndSourcePrefix(CardSelectorPrefs prefs, AbstractModel source)
+        {
+            HeadlessCardSelector.PendingCausePromptTable = prefs.Prompt.LocTable;
+            HeadlessCardSelector.PendingCausePromptKey = prefs.Prompt.LocEntryKey;
+            HeadlessCardSelector.PendingCauseSource = source;
+        }
+
+        public static void PrefsOnlyPrefix(CardSelectorPrefs prefs)
+        {
+            HeadlessCardSelector.PendingCausePromptTable = prefs.Prompt.LocTable;
+            HeadlessCardSelector.PendingCausePromptKey = prefs.Prompt.LocEntryKey;
+        }
+
+        public static void SourceOnlyPrefix(AbstractModel source)
+        {
+            HeadlessCardSelector.PendingCauseSource = source;
+        }
+    }
+
     private static void PatchTaskYield()
     {
         try
@@ -1036,11 +1144,38 @@ public partial class RunSimulator
         public string PendingPrompt { get; private set; } = "";
         private TaskCompletionSource<IEnumerable<CardModel>>? _pendingTcs;
 
+        // "Cause" of the pending selection -- ICardSelector.GetSelectedCards(options, min, max)
+        // carries no signal on its own for *why* the game is asking (True Grit's exhaust-select
+        // and Wish's deck-tutor-select hit this exact same call shape). CardSelectCmd.FromXxx
+        // knows -- it takes a CardSelectorPrefs (prompt) and often an AbstractModel `source` --
+        // but drops both before calling into ICardSelector. CardSelectContextPatches (below)
+        // captures them via Harmony prefixes on CardSelectCmd itself, into these two static
+        // fields, immediately before the call chain reaches GetSelectedCards.
+        internal static AbstractModel? PendingCauseSource;
+        internal static string? PendingCausePromptTable;
+        internal static string? PendingCausePromptKey;
+
+        public string? PendingSourceCategory { get; private set; }
+        public string? PendingSourceId { get; private set; }
+        public string? PendingPromptTable { get; private set; }
+        public string? PendingPromptKey { get; private set; }
+
         public bool HasPending => _pendingTcs != null && !_pendingTcs.Task.IsCompleted;
 
         public Task<IEnumerable<CardModel>> GetSelectedCards(
             IEnumerable<CardModel> options, int minSelect, int maxSelect)
         {
+            // Consume the ambient cause immediately, win or lose (auto-select paths below
+            // still clear it) -- otherwise a later GetSelectedCards call that goes through an
+            // overload without a `source`/`prefs` param could pick up stale context from a
+            // previous, unrelated selection.
+            var causeSource = PendingCauseSource;
+            var causePromptTable = PendingCausePromptTable;
+            var causePromptKey = PendingCausePromptKey;
+            PendingCauseSource = null;
+            PendingCausePromptTable = null;
+            PendingCausePromptKey = null;
+
             var optList = options.ToList();
             if (optList.Count == 0)
                 return Task.FromResult<IEnumerable<CardModel>>(Array.Empty<CardModel>());
@@ -1053,9 +1188,15 @@ public partial class RunSimulator
             PendingOptions = optList;
             PendingMinSelect = minSelect;
             PendingMaxSelect = maxSelect;
+            PendingSourceCategory = causeSource?.Id.Category;
+            PendingSourceId = causeSource?.Id.Entry;
+            PendingPromptTable = causePromptTable;
+            PendingPromptKey = causePromptKey;
             _pendingTcs = new TaskCompletionSource<IEnumerable<CardModel>>();
 
-            Console.Error.WriteLine($"[SIM] Card selection pending: {optList.Count} options, select {minSelect}-{maxSelect}");
+            Console.Error.WriteLine($"[SIM] Card selection pending: {optList.Count} options, select {minSelect}-{maxSelect}"
+                + (causeSource != null ? $", source={causeSource.Id.Category}:{causeSource.Id.Entry}" : "")
+                + (causePromptKey != null ? $", prompt={causePromptTable}.{causePromptKey}" : ""));
 
             // Return the task — the main loop will complete it
             return _pendingTcs.Task;
@@ -1065,6 +1206,10 @@ public partial class RunSimulator
         {
             _pendingTcs?.TrySetResult(selected);
             PendingOptions = null;
+            PendingSourceCategory = null;
+            PendingSourceId = null;
+            PendingPromptTable = null;
+            PendingPromptKey = null;
             _pendingTcs = null;
         }
 
@@ -1082,6 +1227,10 @@ public partial class RunSimulator
         {
             _pendingTcs?.TrySetResult(Array.Empty<CardModel>());
             PendingOptions = null;
+            PendingSourceCategory = null;
+            PendingSourceId = null;
+            PendingPromptTable = null;
+            PendingPromptKey = null;
             _pendingTcs = null;
         }
 

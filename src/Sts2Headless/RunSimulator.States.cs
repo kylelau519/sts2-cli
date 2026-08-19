@@ -97,6 +97,10 @@ public partial class RunSimulator
                 ["min_select"] = _cardSelector.PendingMinSelect,
                 ["max_select"] = _cardSelector.PendingMaxSelect,
                 ["player"] = PlayerSummary(player),
+                ["source_category"] = _cardSelector.PendingSourceCategory,
+                ["source_id"] = _cardSelector.PendingSourceId,
+                ["prompt_table"] = _cardSelector.PendingPromptTable,
+                ["prompt_key"] = _cardSelector.PendingPromptKey,
             };
         }
 
