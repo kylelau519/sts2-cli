@@ -14,17 +14,6 @@ Usage:
 shape mismatch -- that error is the drift signal: if sts2-cli's JSON changes, this is where it
 shows up, right at the point of capture rather than silently inside training data. Re-read the
 relevant RunSimulator.cs method and update the model when it does.
-
-Source: sts2-cli commit 0f344ab (2026-08-16), src/Sts2Headless/RunSimulator.cs and
-RunSimulator.States.cs. Adds history counts, hand-card `upgraded`, and power `id` (see
-CombatHistorySummary/HistoryCounts docstrings below) -- not yet reflected in
-tests/fixtures/ironclad_run_01.jsonl, which predates this commit; re-capture when convenient.
-See VERSION.json.
-
-sts2-cli serializes with JsonIgnoreCondition.WhenWritingNull -- an absent key and a null value are
-indistinguishable on the wire, and nearly every field *is* conditionally absent. So almost
-everything below is Optional with a None default, and every model allows extra fields
-(extra="allow") rather than rejecting anything this file hasn't caught up to yet.
 """
 from __future__ import annotations
 
@@ -73,6 +62,7 @@ class Card(Loose):
 
 
 class Relic(Loose):
+    id: str | None = None
     name: str
     description: str
     vars: dict[str, int] | None = None
@@ -86,19 +76,13 @@ class Potion(Loose):
     index: int
     """Original slot. PlayerSummary.potions drops nulls, so array position != index once any
     potion in the run has been used or discarded -- use this field, not the list position."""
+    id: str | None = None
     name: str
     description: str | None = None
     vars: dict[str, int] | None = None
     target_type: str | None = None
-    """TargetType enum, same vocabulary as HandCard.target_type. use_potion requires target_index
-    only when this is AnyEnemy and >=2 enemies are alive (schema/actions.py: UsePotionArgs) --
-    Self/TargetedNoCreature potions always hit the player regardless of target_index."""
-
-
 class Power(Loose):
     id: str | None = None
-    """PowerModel.Id.Entry, e.g. "MINION_POWER", "VULNERABLE_POWER" -- added alongside the
-    localized `name` so a client can match a specific power without string-matching """
     name: str
     description: str | None = None
     amount: int
@@ -168,6 +152,7 @@ class Enemy(Loose):
     across turns once anything dies."""
 
     index: int
+    id: str | None = None
     name: str
     hp: int
     max_hp: int
@@ -178,9 +163,10 @@ class Enemy(Loose):
 
 
 class Orb(Loose):
-    """Defect only, present iff pcs.OrbQueue.Orbs.Count > 0."""
+    """present iff pcs.OrbQueue.Orbs.Count > 0."""
 
     index: int
+    id: str | None = None
     name: str
     type: str  # Orb class name with the trailing "Orb" stripped
     passive: object | None = None
@@ -188,8 +174,7 @@ class Orb(Loose):
 
 
 class Osty(Loose):
-    """Necrobinder only. {alive: False} if Osty is null; absent entirely for other characters."""
-
+    """{alive: False} if Osty is null; absent entirely for other characters."""
     alive: bool
     name: str | None = None
     hp: int | None = None
@@ -211,11 +196,6 @@ class PileCard(Card):
 
 
 class EntryCount(Loose):
-    """One CombatHistory entry type's count for one creature. `this_combat` is the running total
-    since combat started; `this_turn` resets each time HappenedThisTurn's round+side+per-player-
-    turn-number triple changes -- i.e. it's scoped like Spite's damage-taken check, not like a
-    naive "since I last looked" delta."""
-
     this_turn: int
     this_combat: int
 
@@ -366,18 +346,9 @@ class CardSelect(Loose):
     Fires for upgrade/remove/transform picks and mid-shop/rest-site sub-selections, including
     effects that restrict the pool to a card type or pile (e.g. "choose a Skill card from your
     hand/discard/draw").
-
-    There is no separate "pickable"/"valid" mask, and none is needed: `cards` is always the
-    complete, already-eligible set. The engine applies any type/pile/eligibility filter *before*
-    handing the list to the card selector -- verified in the decompiled source's
-    `CardSelectCmd` (`FromHand`, `FromCombatPile`, `FromDeckGeneric`, etc.), which all build a
-    pre-filtered `List<CardModel>` and only then call `ICardSelector.GetSelectedCards(list, ...)`.
-    sts2-cli's `HeadlessCardSelector` (the thing `card_select`'s `cards` field is read from) is
-    exactly that `ICardSelector` implementation -- it only ever sees the filtered list, never the
-    full hand/pile with some cards marked invalid. So "am I allowed to pick this?" is always
-    "is it in `cards`?" -- no client-side filtering logic (by type or otherwise) is needed or
-    possible; the constraint that produced this selection isn't exposed at all (min/max_select
-    tell you how many to pick, not why these specific cards are the ones offered)."""
+    
+    This is incomplete because the info it offers cannot handle enough situation like in combat info.
+    """
 
     type: Literal["decision"] = "decision"
     decision: Literal["card_select"] = "card_select"
@@ -421,6 +392,12 @@ class EventChoice(Loose):
 
     type: Literal["decision"] = "decision"
     decision: Literal["event_choice"] = "event_choice"
+    event_id: str | None = None
+    """The ancients.json/events.json entry id (e.g. "NEOW", "ABYSSAL_BATHS") `event_name` was
+    resolved from -- see Relic.id. `EventOption` itself has no equivalent id field to add; its
+    `text_key` already is a stable per-option id, just not fully exhaustive (some options,
+    confirmed for Neow's opening choice, generate their text dynamically instead of from a
+    text_key that appears in localization_eng at all)."""
     event_name: str
     description: str | None = None
     options: list[EventOption]

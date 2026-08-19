@@ -468,6 +468,7 @@ public partial class RunSimulator
                 return new Dictionary<string, object?>
                 {
                     ["index"] = i,
+                    ["id"] = e.Monster?.Id.Entry,
                     ["name"] = _loc.Monster(e.Monster?.Id.Entry ?? "UNKNOWN"),
                     ["hp"] = e.CurrentHp,
                     ["max_hp"] = e.MaxHp,
@@ -516,6 +517,7 @@ public partial class RunSimulator
                 result["orbs"] = orbQueue.Orbs.Select((orb, i) => new Dictionary<string, object?>
                 {
                     ["index"] = i,
+                    ["id"] = orb.Id.Entry,
                     ["name"] = _loc.GetText("orbs", orb.Id.Entry + ".title"),
                     ["type"] = orb.GetType().Name.Replace("Orb", ""),
                     ["passive"] = (int)orb.PassiveVal,
@@ -885,6 +887,7 @@ public partial class RunSimulator
             ["type"] = "decision",
             ["decision"] = "event_choice",
             ["context"] = RunContext(),
+            ["event_id"] = eventEntry,
             ["event_name"] = eventName,
             ["description"] = eventDesc,
             ["options"] = options,
