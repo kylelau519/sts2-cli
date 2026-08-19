@@ -125,6 +125,7 @@ class PlayerSummary(Loose):
     max_hp: int
     block: int | None = None
     gold: int
+    max_potions: int | None = None
     relics: list[Relic] = []
     potions: list[Potion] = []
     deck_size: int | None = None

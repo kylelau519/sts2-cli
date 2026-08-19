@@ -297,6 +297,15 @@ public partial class RunSimulator
             if (args.TryGetValue("gold", out var goldEl))
                 player.Gold = goldEl.GetInt32();
 
+            if (args.TryGetValue("max_potions", out var maxPotionsEl))
+            {
+                int newMax = maxPotionsEl.GetInt32();
+                if (newMax > player.MaxPotionCount)
+                    player.AddToMaxPotionCount(newMax - player.MaxPotionCount);
+                else if (newMax < player.MaxPotionCount)
+                    player.SubtractFromMaxPotionCount(player.MaxPotionCount - newMax);
+            }
+
             if (args.TryGetValue("relics", out var relicsEl))
             {
                 var list = GetBackingList<RelicModel>(player, "_relics");
@@ -671,6 +680,7 @@ public partial class RunSimulator
             ["max_hp"] = player.Creature?.MaxHp ?? 0,
             ["block"] = player.Creature?.Block ?? 0,
             ["gold"] = player.Gold,
+            ["max_potions"] = player.MaxPotionCount,
             ["relics"] = player.Relics?.Where(r => r != null).Select(r =>
             {
                 var vars = new Dictionary<string, object?>();
