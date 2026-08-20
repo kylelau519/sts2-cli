@@ -9,6 +9,7 @@ creating any Sts2Session, to avoid redundant filesystem checks when spawning man
 from __future__ import annotations
 
 import json
+import random
 import subprocess
 
 from actions import action
@@ -18,13 +19,7 @@ from save_load import _save_game
 
 
 class Sts2ActionError(RuntimeError):
-    """Raised when sts2-cli responds with {"type": "error", ...} instead of a decision --
-    e.g. an invalid action for the current state, or an internal engine exception
-    (Program.cs's catch-all handler wraps both the same way). play.py's MainLoop checks
-    for this by hand (`state.get("type") == "error"`); this is the same check, centralized
-    so every Sts2Session caller gets a clear exception instead of parse_decision's opaque
-    ValidationError on a shape it was never meant to handle."""
-
+    ...
 
 def _to_decision(raw: dict) -> Decision:
     if raw.get("type") == "error":
@@ -100,12 +95,25 @@ class Sts2Session:
             self._map_cache = None
         return decision
 
+    def randomize_draw_pile(self, state: Decision, seed: int | None = None) -> None:
+        """
+        Creates an explicit chance node by explicitly reshuffling the draw pile 
+        in the C# game engine. Call this at the branch point before playing a card.
+        """
+        if getattr(state, "decision", None) != "combat_play" or not getattr(state, "draw_pile", None):
+            return
+        rng = random.Random(seed)
+        card_ids = [
+            card.id.split(":")[-1] if card.id and ":" in card.id else card.id 
+            for card in state.draw_pile
+        ]
+        rng.shuffle(card_ids)
+        self._send_raw({
+            "cmd": "set_draw_order",
+            "cards": card_ids
+        })
+
     def get_map(self) -> dict:
-        """The full act map (all rows, boss, current position) -- not a Decision, since it's
-        a side query rather than a response to an action. Callers wanting to plan a route
-        further than the one-hop `choices` list on a map_select decision go through this.
-        Cached: rows/boss are static for the whole act and current_coord only moves on
-        select_map_node (see step()), so repeat calls between floors are free."""
         if self._map_cache is None:
             self._map_cache = self._send_raw({"cmd": "get_map"})
         return self._map_cache
