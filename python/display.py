@@ -296,7 +296,9 @@ def _format_upgrade_preview(stats, aug, current_cost=None):
     # Cost change
     aug_cost = aug.get("cost")
     if current_cost is not None and aug_cost is not None and aug_cost != current_cost:
-        parts.append(c(f"cost {current_cost}→{aug_cost}", "dim"))
+        disp_curr = "X" if current_cost == -1 else "-" if current_cost == -2 else current_cost
+        disp_aug = "X" if aug_cost == -1 else "-" if aug_cost == -2 else aug_cost
+        parts.append(c(f"cost {disp_curr}→{disp_aug}", "dim"))
     # Compare all stats, show changed values with readable names
     all_keys = set(list(stats.keys()) + list(aug_stats.keys()))
     for k in sorted(all_keys):
@@ -334,7 +336,8 @@ def print_cards_grid(cards, show_index=False, inline_stats=False, show_playable=
         title_str = f"{mark}{idx_str}{c(name, type_color)}{ench_str}{up}"
         
         body_lines = []
-        cost = cd.get("cost", "?")
+        cost_val = cd.get("cost", "?")
+        cost = "X" if cost_val == -1 else "-" if cost_val == -2 else cost_val
         star_cost = cd.get("star_cost", 0)
         cost_str = c(str(cost), "cyan") + (f"+{c(f'{star_cost}⭐', 'yellow')}" if star_cost > 0 else "")
         rare = cd.get("rarity")
