@@ -46,29 +46,7 @@ internal class InlineSynchronizationContext : SynchronizationContext
 
     public override void Post(SendOrPostCallback d, object? state)
     {
-        if (_executing)
-        {
-            _queue.Enqueue((d, state));
-            return;
-        }
-        // removed debug log
-
-        // Execute inline immediately, then drain any nested posts
-        _executing = true;
-        try
-        {
-            d(state);
-            // Drain any callbacks that were queued during execution
-            while (_queue.Count > 0)
-            {
-                var (cb, st) = _queue.Dequeue();
-                cb(st);
-            }
-        }
-        finally
-        {
-            _executing = false;
-        }
+        _queue.Enqueue((d, state));
     }
 
     public override void Send(SendOrPostCallback d, object? state)
@@ -78,13 +56,11 @@ internal class InlineSynchronizationContext : SynchronizationContext
 
     public void Pump()
     {
-        // Drain any remaining queued callbacks
+        // Drain all queued callbacks, taking care to allow re-entrant queueing
         while (_queue.Count > 0)
         {
             var (cb, st) = _queue.Dequeue();
-            _executing = true;
-            try { cb(st); }
-            finally { _executing = false; }
+            cb(st);
         }
     }
 }
