@@ -505,10 +505,92 @@ public partial class RunSimulator
                     Thread.Sleep(1);
                 }
             }
+
+            // executor.IsRunning going false doesn't guarantee every effect has actually landed:
+            // some paths (e.g. an enemy's on-turn-end status/curse application) fire via a
+            // Task.Run whose continuation posts back onto _syncCtx from a background thread --
+            // that Post can arrive *after* this method already returned, so state gets captured
+            // mid-update and the same seed+actions can replay to a different hand next time
+            // (observed: opening-hand draw pile counts differing across replays of an identical
+            // action log). Re-check a cheap state fingerprint until it stops changing before
+            // trusting it -- bounded so a genuinely-stuck fingerprint can't hang forever.
+            string? last = null;
+            int stableStreak = 0;
+            const int requiredStable = 5;
+            for (int i = 0; i < 200 && stableStreak < requiredStable; i++)
+            {
+                Thread.Sleep(2);
+                _syncCtx.Pump();
+                var fp = StabilityFingerprint();
+                if (fp == last) stableStreak++;
+                else { stableStreak = 1; last = fp; }
+            }
         }
         catch (Exception ex)
         {
             Log($"WaitForActionExecutor exception: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Cheap snapshot of state that can still be in flux from a straggling background
+    /// continuation (see the stabilization loop in WaitForActionExecutor above). Read between
+    /// arbitrary decision points, not just combat, so every accessor here is defensive --
+    /// something throwing (e.g. mid-transition) degrades to "unknown" rather than blowing up
+    /// the calling action.
+    /// </summary>
+    private string StabilityFingerprint()
+    {
+        try
+        {
+            if (_runState == null) return "";
+            var player = _runState.Players[0];
+            var pcs = player.PlayerCombatState;
+            var parts = new List<string>
+            {
+                $"hp={player.Creature?.CurrentHp}",
+                $"gold={player.Gold}",
+                // Outside the pcs-gated block on purpose: a relic's async AfterObtained() (e.g.
+                // Precise Scissors' deck-removal card_select) can still be mid-flight on a
+                // background thread pre-combat, when pcs is null and none of the combat-only
+                // fields below would ever go unstable to catch it. Without this, the wait below
+                // can report "stable" before that continuation lands, and if it finishes only
+                // after combat's draw pile is built from the deck, the opening hand depends on a
+                // race instead of being deterministic from seed+actions (see this method's
+                // docstring below on WaitForActionExecutor -- "opening-hand draw pile counts
+                // differing across replays of an identical action log").
+                "deck=" + string.Join(",", player.Deck?.Cards?.Where(c => c != null)
+                                                 .Select(c => c.Id.ToString()) ?? Enumerable.Empty<string>()),
+            };
+
+            if (pcs != null)
+            {
+                parts.Add($"energy={pcs.Energy}");
+                parts.Add("hand=" + string.Join(",", pcs.Hand?.Cards?.Select(c => c.Id.ToString())
+                                                       ?? Enumerable.Empty<string>()));
+                parts.Add($"draw={pcs.DrawPile?.Cards?.Count}");
+                parts.Add($"discard={pcs.DiscardPile?.Cards?.Count}");
+                parts.Add($"exhaust={pcs.ExhaustPile?.Cards?.Count}");
+
+                var combatState = CombatManager.Instance.DebugOnlyGetState();
+                var enemies = combatState?.Enemies?.Where(e => e != null && e.IsAlive)
+                    .Select(e => $"{e.Monster?.Id.Entry}:{e.CurrentHp}:{e.Block}")
+                    ?? Enumerable.Empty<string>();
+                parts.Add("enemies=" + string.Join(",", enemies));
+
+                try
+                {
+                    var entries = CombatManager.Instance.History?.Entries;
+                    if (entries != null) parts.Add($"history={entries.Count()}");
+                }
+                catch { /* not always available, e.g. right as combat ends */ }
+            }
+
+            return string.Join("|", parts);
+        }
+        catch
+        {
+            return "";  // can't fingerprint right now -- treat as "unknown", not "changed"
         }
     }
 

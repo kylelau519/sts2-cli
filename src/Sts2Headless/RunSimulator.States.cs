@@ -825,7 +825,7 @@ public partial class RunSimulator
                 {
                     var parts = opt.TextKey.Split('.');
                     var optionId = parts.Length > 0 ? parts[^1] : opt.TextKey;
-                    var relicModel = ModelDb.GetById<RelicModel>(new ModelId("RELIC", optionId));
+                    var relicModel = ModelDb.GetByIdOrNull<RelicModel>(new ModelId("RELIC", optionId));
                     if (relicModel != null)
                     {
                         var mutable = relicModel.ToMutable();

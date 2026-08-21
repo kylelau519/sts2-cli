@@ -429,6 +429,7 @@ class RestSite(Loose):
     type: Literal["decision"] = "decision"
     decision: Literal["rest_site"] = "rest_site"
     options: list[RestOption]
+    player: PlayerSummary
 
 
 # --- shop (ShopState, RunSimulator.cs:2724-2804) ---
