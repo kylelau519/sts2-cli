@@ -1870,6 +1870,75 @@ public partial class RunSimulator
         };
     }
 
+    // StandardActMap fixes the grid at 7 columns (see StandardActMap._mapWidth); rows vary per
+    // act (ActModel.GetNumberOfRooms + 1) but 20 comfortably covers every act's floor count.
+    // MaxMapChildren caps out-degree per point -- map generation only ever links a point to the
+    // row directly above it via left/straight/right (MapPoint.IsAdjacentLeft/IsAdjacentRight), so
+    // 3 is exact for every grid point. BossMapPoint sits outside the grid and gets its slot below.
+    private const int MaxMapCols = 7;
+    private const int MaxMapRows = 20;
+    private const int MaxMapChildren = 3;
+    private const int MapPointFloats = 3 + MaxMapChildren * 2; // type, visited, current, then (col,row) per child
+    private const int MapBufferSize = MaxMapRows * MaxMapCols * MapPointFloats + 2 * MapPointFloats; // Two boss nodes
+
+    /// <summary>Writes one MapPoint's fixed-width slot: type, visited, current, then up to
+    /// MaxMapChildren (col,row) child pairs (-1,-1) padded. A null point (empty grid cell) writes
+    /// an all-empty slot: type=-1, both flags 0, all children (-1,-1).</summary>
+    private static void MapPointToBuffer(MapPoint? point, bool isVisited, bool isCurrent, float[] buffer, ref int offset)
+    {
+        // MapPointType (MegaCrit.Sts2.Core.Map): 0=Unassigned 1=Unknown 2=Shop 3=Treasure
+        // 4=RestSite 5=Monster 6=Elite 7=Boss 8=Ancient -- Ancient is also what StartingMapPoint
+        // is tagged as (confirmed against GetFullMap's JSON output: the row-0 slot marked
+        // visited+current came back as type 8, not a Monster/Unknown room type).
+        buffer[offset++] = point != null ? (int)point.PointType : -1;
+        buffer[offset++] = isVisited ? 1 : 0;
+        buffer[offset++] = isCurrent ? 1 : 0;
+
+        int written = 0;
+        if (point?.Children != null)
+        {
+            foreach (var child in point.Children.OrderBy(c => c.coord.col))
+            {
+                if (written >= MaxMapChildren) break;
+                buffer[offset++] = child.coord.col;
+                buffer[offset++] = child.coord.row;
+                written++;
+            }
+        }
+        for (; written < MaxMapChildren; written++)
+        {
+            buffer[offset++] = -1;
+            buffer[offset++] = -1;
+        }
+    }
+
+    /// <summary>Buffer counterpart to GetFullMap</summary>
+    private void Map(float[] buffer, ref int offset)
+    {
+        var map = _runState?.Map;
+        var currentCoord = _runState?.CurrentMapCoord;
+        var visited = _runState?.VisitedMapCoords;
+        int rowCount = map?.GetRowCount() ?? 0;
+
+        for (int row = 0; row < MaxMapRows; row++)
+        {
+            for (int col = 0; col < MaxMapCols; col++)
+            {
+                var point = row < rowCount ? map!.GetPoint(col, row) : null;
+                bool isVisited = point != null && (visited?.Any(v => v.col == point.coord.col && v.row == point.coord.row) ?? false);
+                bool isCurrent = point != null && currentCoord.HasValue &&
+                    currentCoord.Value.col == point.coord.col && currentCoord.Value.row == point.coord.row;
+                MapPointToBuffer(point, isVisited, isCurrent, buffer, ref offset);
+            }
+        }
+
+        var boss = map?.BossMapPoint;
+        bool bossVisited = boss != null && (visited?.Any(v => v.col == boss.coord.col && v.row == boss.coord.row) ?? false);
+        bool bossCurrent = boss != null && currentCoord.HasValue &&
+            currentCoord.Value.col == boss.coord.col && currentCoord.Value.row == boss.coord.row;
+        MapPointToBuffer(boss, bossVisited, bossCurrent, buffer, ref offset);
+    }
+
     public void CleanUp()
     {
         try
