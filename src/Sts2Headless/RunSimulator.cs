@@ -167,6 +167,8 @@ public partial class RunSimulator
     private static bool _cardSelectorRegistered;
     private static bool _combatEventsRegistered;
 
+    private static readonly Tokenizer _tokenizer = new();
+
     public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null)
     {
         try
@@ -691,7 +693,7 @@ public partial class RunSimulator
     /// by counting typed CombatHistory entries at preview time, because no dedicated counter
     /// field exists anywhere on PlayerCombatState. Exposing the counts here lets a client see
     /// the scaling inputs even when the scaling card isn't currently in hand.</summary>
-    private static Dictionary<string, object?> HistoryCounts(Creature? creature, ICombatState? combatState)
+    private static Dictionary<string, object?> HistoryCountsJson(Creature? creature, ICombatState? combatState)
     {
         if (creature == null) return new();
         var entries = CombatManager.Instance.History.Entries;
@@ -729,7 +731,150 @@ public partial class RunSimulator
         };
     }
 
-    private Dictionary<string, object?> PlayerSummary(Player player)
+    private static void HistoryCounts(Creature? creature, ICombatState? combatState, float[] buffer, int offset)
+    {
+        if (creature == null) return;
+        var entries = CombatManager.Instance.History.Entries;
+        int currentOffset = offset;
+        void WriteCounts<T>(Func<T, bool> matches) where T : CombatHistoryEntry
+        {
+            int thisTurn = 0;
+            int total = 0;
+            foreach (var entry in entries.OfType<T>().Where(matches))
+            {
+                total++;
+                if (entry.HappenedThisTurn(combatState))
+                {
+                    thisTurn++;
+                }
+            }
+            buffer[currentOffset++] = thisTurn;
+            buffer[currentOffset++] = total;
+        }
+
+        // Now simply call them in order. 
+        WriteCounts<BlockGainedEntry>(e => e.Actor == creature);
+        WriteCounts<CardAfflictedEntry>(e => e.Actor == creature);
+        WriteCounts<CardDiscardedEntry>(e => e.Actor == creature);
+        WriteCounts<CardDrawnEntry>(e => e.Actor == creature);
+        WriteCounts<CardExhaustedEntry>(e => e.Actor == creature);
+        WriteCounts<CardGeneratedEntry>(e => e.Actor == creature);
+        WriteCounts<CardPlayFinishedEntry>(e => e.Actor == creature);
+        WriteCounts<CreatureAttackedEntry>(e => e.Actor == creature);
+        WriteCounts<DamageReceivedEntry>(e => e.Receiver == creature);
+        WriteCounts<DamageReceivedEntry>(e => e.Dealer == creature);
+        WriteCounts<EnergySpentEntry>(e => e.Actor == creature);
+        WriteCounts<MonsterPerformedMoveEntry>(e => e.Actor == creature);
+        WriteCounts<OrbChanneledEntry>(e => e.Actor == creature);
+        WriteCounts<PotionUsedEntry>(e => e.Actor == creature);
+        WriteCounts<PowerReceivedEntry>(e => e.Actor == creature);
+        WriteCounts<PowerReceivedEntry>(e => e.Applier == creature);
+        WriteCounts<StarsModifiedEntry>(e => e.Actor == creature);
+        WriteCounts<SummonedEntry>(e => e.Actor == creature);
+    }
+    
+    // Write Potion into buffer
+    private static void Potion(PotionModel? potion, float[] buffer, int offset)
+    {
+        if (potion == null) return;
+        buffer[offset] = _tokenizer.Encode("potions", potion.Id.Entry);
+        buffer[offset + 1] = potion.TargetType switch
+        {
+            PotionTargetType.Self => 0,
+            PotionTargetType.Ally => 1,
+            PotionTargetType.Enemy => 2,
+            _ => -1
+        };
+        
+    }
+
+    private static void Relic(RelicModel? relic, float[] buffer, int offset)
+    {
+        if (relic == null) return;
+        buffer[offset] = _tokenizer.Encode("relics", relic.Id.Entry);
+        buffer[offset + 1] = relic.ShowCounter ? relic.DisplayAmount : -1;
+    }
+
+    private static void Card(CardModel? card, float[] buffer, int offset)
+    {
+        if (card == null) return;
+        buffer[offset] = _tokenizer.Encode("cards", card.Id.Entry);
+        buffer[offset + 1] = card.EnergyCost?.GetResolved() ?? 0;
+        buffer[offset + 2] = (int)card.Type;
+        buffer[offset + 3] = (int)card.Rarity;
+        buffer[offset + 4] = card.IsUpgraded ? 1 : 0;
+        buffer[offset + 5] = card.IsUpgradable ? 1 : 0;
+        buffer[offset + 6] = card.Enchantment != null ? _tokenizer.Encode("enchantments", card.Enchantment.Id.Entry) : -1;
+        buffer[offset + 7] = card.Enchantment != null ? card.Enchantment.Amount : -1;
+        buffer[offset + 8] = card.Affliction != null ? _tokenizer.Encode("afflictions", card.Affliction.Id.Entry) : -1;
+        buffer[offset + 9] = card.Affliction != null ? card.Affliction.Amount : -1;
+        int kwMask = 0;
+        if (card.Keywords.Contains(CardKeyword.Exhaust))    kwMask |= 1 << 0;
+        if (card.Keywords.Contains(CardKeyword.Ethereal))   kwMask |= 1 << 1;
+        if (card.Keywords.Contains(CardKeyword.Innate))     kwMask |= 1 << 2;
+        if (card.Keywords.Contains(CardKeyword.Unplayable)) kwMask |= 1 << 3;
+        if (card.Keywords.Contains(CardKeyword.Retain))     kwMask |= 1 << 4;
+        if (card.Keywords.Contains(CardKeyword.Sly))        kwMask |= 1 << 5;
+        if (card.Keywords.Contains(CardKeyword.Eternal))    kwMask |= 1 << 6;
+        buffer[offset + 10] = kwMask;
+    }
+
+    private static void PlayerSummary(Player player, float[] buffer, int offset)
+    {
+        if (player == null) return;
+        buffer[offset] = _tokenizer.Encode("characters", player.Character?.Id.Entry ?? "IRONCLAD");
+        buffer[offset + 1] = player.Creature?.CurrentHp ?? 0;
+        buffer[offset + 2] = player.Creature?.MaxHp ?? 0;
+        buffer[offset + 3] = player.Creature?.Block ?? 0;
+        buffer[offset + 4] = player.Gold;
+        buffer[offset + 5] = player.MaxPotionCount;
+        buffer[offset + 6] = player.Deck?.Cards?.Count(c => c != null) ?? 0;
+        // Only handle first 40 relics
+        int relicBufferSize = 2;
+        for (int i = 0; i < 40; i++)
+        {
+            if (player.Relics != null && i < player.Relics.Count)
+                Relic(player.Relics[i], buffer, offset + 7 + i * reliccBufferSize);
+            else
+            {
+                buffer[offset + 7 + i * relicBufferSize] = 0;
+                buffer[offset + 7 + i * relicBufferSize + 1] = -1;
+            }
+        }
+        // Max potion 8
+        int potionBufferSize = 2;
+        for (int i = 0; i < 8; i++)
+        {
+            if (player.Potions != null && i < player.Potions.Count)
+                Potion(player.Potions[i], buffer, offset + 87 + i * potionBufferSize);
+            else
+            {
+                buffer[offset + 87 + i * potionBufferSize] = 0;
+                buffer[offset + 87 + i * potionBufferSize + 1] = -1;
+            }
+        }
+        // Max hand 50
+        int cardBufferSize = 10;
+        for (int i = 0; i < 50; i++)
+        {
+            if (player.Deck?.Cards != null && i < player.Deck.Cards.Count)
+                Card(player.Deck.Cards[i], buffer, offset + 103 + i * cardBufferSize);
+            else
+            {
+                buffer[offset + 103 + i * cardBufferSize] = 0;
+                buffer[offset + 103 + i * cardBufferSize + 1] = 0;
+                buffer[offset + 103 + i * cardBufferSize + 2] = 0;
+                buffer[offset + 103 + i * cardBufferSize + 3] = 0;
+                buffer[offset + 103 + i * cardBufferSize + 4] = 0;
+                buffer[offset + 103 + i * cardBufferSize + 5] = 0;
+                buffer[offset + 103 + i * cardBufferSize + 6] = -1;
+                buffer[offset + 103 + i * cardBufferSize + 7] = -1;
+                buffer[offset + 103 + i * cardBufferSize + 8] = -1;
+                buffer[offset + 103 + i * cardBufferSize + 9] = -1;
+            }
+        }
+    }
+    private Dictionary<string, object?> PlayerSummaryJson(Player player)
     {
         return new Dictionary<string, object?>
         {
@@ -755,7 +900,7 @@ public partial class RunSimulator
                     ["id"] = r.Id.Entry,
                     ["name"] = _loc.Relic(r.Id.Entry),
                     ["description"] = _loc.GetText("relics", r.Id.Entry + ".description"),
-                    ["vars"] = vars.Count > 0 ? vars : null,
+                    ["vars"] = vars.Count > 0 ? vars : null, //what is this value?
                     ["counter"] = r.ShowCounter ? r.DisplayAmount : null,
                 };
             }).ToList(),

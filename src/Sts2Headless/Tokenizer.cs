@@ -31,6 +31,7 @@ namespace Sts2Headless
             {
                 LoadCategory(dir, category);
             }
+            AddCharacterTokens();
         }
 
         /// <summary>Mirrors LocLookup's base-dir resolution in RunSimulator.cs -- both walk up from
@@ -72,12 +73,24 @@ namespace Sts2Headless
         public int Encode(string category, string? id)
         {
             if (string.IsNullOrEmpty(id)) return UnknownToken;
-            return _tokenMap.TryGetValue(category + ":" + id, out var token) ? token : UnknownToken;
+            return _tokenMap.TryGetValue(category.ToUpperInvariant() + ":" + id.ToUpperInvariant(), out var token) ? token : UnknownToken;
         }
 
         public string Decode(int token)
         {
             return _reverseTokenMap.TryGetValue(token, out var key) ? key : "UNKNOWN";
+        }
+
+        private static void AddCharacterTokens()
+        {
+            int idx = 0;
+            foreach (var character in new[] { "IRONCLAD", "SILENT", "DEFECT", "REGENT", "NECROBINDER" })
+            {
+                var tokenKey = "CHARACTERS:" + character;
+                _tokenMap[tokenKey] = idx;
+                _reverseTokenMap[idx] = tokenKey;
+                idx++;
+            }
         }
     }
 }
