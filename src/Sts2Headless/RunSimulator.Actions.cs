@@ -466,6 +466,12 @@ public partial class RunSimulator
         if (!entry.IsStocked) return Error("Relic already purchased");
         if (player.Gold < entry.Cost) return Error("Not enough gold");
 
+        // Captured before the purchase resolves: a successful purchase clears entry.Model
+        // to null (or replaces it with a newly-restocked item) via MerchantEntry.
+        // OnTryPurchaseWrapper, so reading entry.Model for logging after that point is
+        // unreliable -- see the same fix applied to DoBuyPotion below.
+        var boughtRelicName = entry.Model?.GetType().Name ?? "?";
+
         // The pickup effect can open a card_select (e.g. KIFUDA → enchant up to 3 with
         // Adroit, #80). Run the purchase on a background task and yield as soon as a
         // pending selection appears so the caller can resolve it; the background task
@@ -482,7 +488,7 @@ public partial class RunSimulator
         }
         if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null)
         {
-            Log($"Buy relic {entry.Model.GetType().Name}: yielded for pending selection");
+            Log($"Buy relic {boughtRelicName}: yielded for pending selection");
             return DetectDecisionPoint();
         }
         var swRelic = System.Diagnostics.Stopwatch.StartNew();
@@ -492,7 +498,7 @@ public partial class RunSimulator
             Thread.Sleep(10);
         }
         _syncCtx.Pump();
-        Log($"Bought relic: {entry.Model.GetType().Name} for {entry.Cost}g");
+        Log($"Bought relic: {boughtRelicName} for {entry.Cost}g");
 
         return DetectDecisionPoint();
     }
@@ -512,9 +518,16 @@ public partial class RunSimulator
         if (!entry.IsStocked) return Error("Potion already purchased");
         if (player.Gold < entry.Cost) return Error("Not enough gold");
 
+        // Captured before the purchase resolves: a successful purchase clears entry.Model
+        // to null (or replaces it with a newly-restocked item) via MerchantEntry.
+        // OnTryPurchaseWrapper, so reading entry.Model for logging after that point NREs
+        // (the bug this fixes -- entry.Model was null by the time the old code below read
+        // it, on every non-restocking purchase).
+        var boughtPotionName = entry.Model?.GetType().Name ?? "?";
+
         entry.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()).GetAwaiter().GetResult();
         _syncCtx.Pump();
-        Log($"Bought potion: {entry.Model.GetType().Name} for {entry.Cost}g");
+        Log($"Bought potion: {boughtPotionName} for {entry.Cost}g");
 
         return DetectDecisionPoint();
     }
