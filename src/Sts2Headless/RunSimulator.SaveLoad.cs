@@ -55,7 +55,7 @@ public partial class RunSimulator
                 CardSelectCmd.UseSelector(_cardSelector);
                 _cardSelectorRegistered = true;
             }
-            LocPatches._bundleSimRef = this;
+            BundlePatches._bundleSimRef = this;
 
             var savedRoom = _runState.CurrentRoom;
 

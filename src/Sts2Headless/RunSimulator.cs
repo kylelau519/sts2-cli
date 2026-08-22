@@ -232,7 +232,7 @@ public partial class RunSimulator
                 CardSelectCmd.UseSelector(_cardSelector);
                 _cardSelectorRegistered = true;
             }
-            LocPatches._bundleSimRef = this;
+            BundlePatches._bundleSimRef = this;
 
             // Now we should be at the map — detect decision point
             return DetectDecisionPoint();
@@ -996,6 +996,9 @@ public partial class RunSimulator
         // Initialize localization system (needed for events, cards, etc.)
         InitLocManager();
 
+        // Patch FromChooseABundleScreen to use our card selector
+        PatchBundleScreen();
+
         var subtypes = MegaCrit.Sts2.Core.Models.AbstractModelSubtypes.All;
         int registered = 0, failed = 0;
         for (int i = 0; i < subtypes.Count; i++)
@@ -1606,69 +1609,6 @@ public partial class RunSimulator
             catch { }
 
             Console.Error.WriteLine("[INFO] LocManager initialized with stub tables");
-
-            // Use Harmony to patch methods that need fallback behavior
-            var harmony = new Harmony("sts2headless.locpatch");
-
-            // With real loc data loaded, we only need fallback patches for:
-            // 1. LocTable.GetRawText — return key for missing entries instead of throwing
-            // 2. LocManager.SmartFormat — _smartFormatter is null, return raw text instead
-            // We do NOT patch GetFormattedText/GetRawText on LocString anymore
-            // so the real localization pipeline works (needed for Neow event etc.)
-
-            var getRawText = typeof(LocTable).GetMethod("GetRawText",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
-                null, new[] { typeof(string) }, null);
-            var prefix = typeof(LocPatches).GetMethod(nameof(LocPatches.GetRawTextPrefix),
-                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-            if (getRawText != null && prefix != null)
-            {
-                harmony.Patch(getRawText, new HarmonyMethod(prefix));
-                Console.Error.WriteLine("[INFO] Patched LocTable.GetRawText");
-            }
-
-            // Patch GetLocString to not throw
-            var getLocString = typeof(LocTable).GetMethod("GetLocString");
-            var glsPrefix = typeof(LocPatches).GetMethod(nameof(LocPatches.GetLocStringPrefix),
-                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-            if (getLocString != null && glsPrefix != null)
-            {
-                try { harmony.Patch(getLocString, new HarmonyMethod(glsPrefix)); }
-                catch (Exception ex4) { Console.Error.WriteLine($"[WARN] Failed to patch GetLocString: {ex4.Message}"); }
-            }
-
-            // Patch FromChooseABundleScreen to use our card selector
-            try
-            {
-                var bundleMethod = typeof(MegaCrit.Sts2.Core.Commands.CardSelectCmd).GetMethod("FromChooseABundleScreen",
-                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-                var bundlePrefix = typeof(LocPatches).GetMethod(nameof(LocPatches.BundleScreenPrefix),
-                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-                if (bundleMethod != null && bundlePrefix != null)
-                {
-                    harmony.Patch(bundleMethod, new HarmonyMethod(bundlePrefix));
-                    Console.Error.WriteLine("[INFO] Patched FromChooseABundleScreen");
-                }
-            }
-            catch (Exception ex) { Console.Error.WriteLine($"[WARN] Bundle patch: {ex.Message}"); }
-
-
-            // Patch HasEntry to always return true
-            PatchMethod(harmony, typeof(LocTable), "HasEntry", nameof(LocPatches.HasEntryPrefix));
-
-            // Patch IsLocalKey to always return true
-            PatchMethod(harmony, typeof(LocTable), "IsLocalKey", nameof(LocPatches.HasEntryPrefix));
-
-            // Patch LocString.Exists (static) to always return true
-            var locStringExists = typeof(LocString).GetMethod("Exists",
-                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-            if (locStringExists != null)
-            {
-                PatchMethod(harmony, locStringExists, nameof(LocPatches.HasEntryPrefix));
-            }
-
-            // Patch LocTable.GetLocStringsWithPrefix to return empty list
-            PatchMethod(harmony, typeof(LocTable), "GetLocStringsWithPrefix", nameof(LocPatches.GetLocStringsWithPrefixPrefix));
         }
         catch (Exception ex)
         {
@@ -1676,64 +1616,26 @@ public partial class RunSimulator
         }
     }
 
-    private static void PatchMethod(Harmony harmony, Type type, string methodName, string patchName)
+    private static void PatchBundleScreen()
     {
         try
         {
-            var method = type.GetMethod(methodName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-            PatchMethod(harmony, method, patchName);
+            var harmony = new Harmony("sts2headless.bundlepatch");
+            var bundleMethod = typeof(MegaCrit.Sts2.Core.Commands.CardSelectCmd).GetMethod("FromChooseABundleScreen",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+            var bundlePrefix = typeof(BundlePatches).GetMethod(nameof(BundlePatches.BundleScreenPrefix),
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+            if (bundleMethod != null && bundlePrefix != null)
+            {
+                harmony.Patch(bundleMethod, new HarmonyMethod(bundlePrefix));
+                Console.Error.WriteLine("[INFO] Patched FromChooseABundleScreen");
+            }
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[WARN] Failed to patch {type.Name}.{methodName}: {ex.Message}"); }
+        catch (Exception ex) { Console.Error.WriteLine($"[WARN] Bundle patch: {ex.Message}"); }
     }
 
-    private static void PatchMethod(Harmony harmony, System.Reflection.MethodInfo? method, string patchName)
+    internal static class BundlePatches
     {
-        if (method == null) return;
-        try
-        {
-            var prefix = typeof(LocPatches).GetMethod(patchName, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-            if (prefix != null) harmony.Patch(method, new HarmonyMethod(prefix));
-        }
-        catch (Exception ex) { Console.Error.WriteLine($"[WARN] Failed to patch {method.Name}: {ex.Message}"); }
-    }
-
-    internal static class LocPatches
-    {
-        public static bool GetRawTextPrefix(LocTable __instance, string key, ref string __result)
-        {
-            // Return key as fallback "translation"
-            __result = key;
-            return false;
-        }
-
-        public static bool GetFormattedTextPrefix(LocString __instance, ref string __result)
-        {
-            __result = __instance?.LocEntryKey ?? "";
-            return false;
-        }
-
-        public static bool GetRawTextInstancePrefix(LocString __instance, ref string __result)
-        {
-            __result = __instance?.LocEntryKey ?? "";
-            return false;
-        }
-
-
-        public static bool HasEntryPrefix(ref bool __result)
-        {
-            __result = true;
-            return false;
-        }
-
-        public static bool GetLocStringPrefix(LocTable __instance, string key, ref LocString __result)
-        {
-            var nameField = typeof(LocTable).GetField("_name",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            var tableName = nameField?.GetValue(__instance) as string ?? "_unknown";
-            __result = new LocString(tableName, key);
-            return false;
-        }
-
         /// <summary>
         /// Intercept bundle selection — store bundles and wait for player to pick a pack index.
         /// </summary>
@@ -1766,12 +1668,6 @@ public partial class RunSimulator
 
         // Static reference so Harmony patch can access the simulator instance
         internal static RunSimulator? _bundleSimRef;
-
-        public static bool GetLocStringsWithPrefixPrefix(ref IReadOnlyList<LocString> __result)
-        {
-            __result = new List<LocString>();
-            return false;
-        }
     }
 
     private static void Log(string message)
