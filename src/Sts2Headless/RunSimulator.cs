@@ -686,52 +686,36 @@ public partial class RunSimulator
             ["removed_keywords"] = removedKws.Count > 0 ? removedKws : null,
         };
     }
+    private static readonly string[] HistoryCounterNames =
+    {
+        "block_gained", "card_afflicted", "card_discarded", "card_drawn", "card_exhausted",
+        "card_generated", "card_played", "creature_attacked", "damage_received", "damage_dealt",
+        "energy_spent", "monster_move_performed", "orb_channeled", "potion_used",
+        "power_received", "power_applied", "stars_modified", "summoned",
+    };
 
     /// <summary>Per-creature counts of combat history events, both for the current turn and the
-    /// whole combat so far. This mirrors how the engine itself computes scaling for cards like
-    /// Supermassive (cards created), Spite (damage taken this turn), and Murder (cards drawn) --
-    /// by counting typed CombatHistory entries at preview time, because no dedicated counter
-    /// field exists anywhere on PlayerCombatState. Exposing the counts here lets a client see
-    /// the scaling inputs even when the scaling card isn't currently in hand.</summary>
+    /// whole combat so far </summary>
     private static Dictionary<string, object?> HistoryCountsJson(Creature? creature, ICombatState? combatState)
     {
         if (creature == null) return new();
-        var entries = CombatManager.Instance.History.Entries;
+        var buffer = new float[HistoryCounterNames.Length * 2];
+        int offset = 0;
+        HistoryCounts(creature, combatState, buffer, ref offset);
 
-        Dictionary<string, object?> CountsOf<T>(Func<T, bool> matches) where T : CombatHistoryEntry
+        var result = new Dictionary<string, object?>();
+        for (int i = 0; i < HistoryCounterNames.Length; i++)
         {
-            var list = entries.OfType<T>().Where(matches).ToList();
-            return new Dictionary<string, object?>
+            result[HistoryCounterNames[i]] = new Dictionary<string, object?>
             {
-                ["this_turn"] = list.Count(e => e.HappenedThisTurn(combatState)),
-                ["this_combat"] = list.Count,
+                ["this_turn"] = (int)buffer[i * 2],
+                ["this_combat"] = (int)buffer[i * 2 + 1],
             };
         }
-
-        return new Dictionary<string, object?>
-        {
-            ["block_gained"] = CountsOf<BlockGainedEntry>(e => e.Actor == creature),
-            ["card_afflicted"] = CountsOf<CardAfflictedEntry>(e => e.Actor == creature),
-            ["card_discarded"] = CountsOf<CardDiscardedEntry>(e => e.Actor == creature),
-            ["card_drawn"] = CountsOf<CardDrawnEntry>(e => e.Actor == creature),
-            ["card_exhausted"] = CountsOf<CardExhaustedEntry>(e => e.Actor == creature),
-            ["card_generated"] = CountsOf<CardGeneratedEntry>(e => e.Actor == creature),
-            ["card_played"] = CountsOf<CardPlayFinishedEntry>(e => e.Actor == creature),
-            ["creature_attacked"] = CountsOf<CreatureAttackedEntry>(e => e.Actor == creature),
-            ["damage_received"] = CountsOf<DamageReceivedEntry>(e => e.Receiver == creature),
-            ["damage_dealt"] = CountsOf<DamageReceivedEntry>(e => e.Dealer == creature),
-            ["energy_spent"] = CountsOf<EnergySpentEntry>(e => e.Actor == creature),
-            ["monster_move_performed"] = CountsOf<MonsterPerformedMoveEntry>(e => e.Actor == creature),
-            ["orb_channeled"] = CountsOf<OrbChanneledEntry>(e => e.Actor == creature),
-            ["potion_used"] = CountsOf<PotionUsedEntry>(e => e.Actor == creature),
-            ["power_received"] = CountsOf<PowerReceivedEntry>(e => e.Actor == creature),
-            ["power_applied"] = CountsOf<PowerReceivedEntry>(e => e.Applier == creature),
-            ["stars_modified"] = CountsOf<StarsModifiedEntry>(e => e.Actor == creature),
-            ["summoned"] = CountsOf<SummonedEntry>(e => e.Actor == creature),
-        };
+        return result;
     }
 
-    private static void HistoryCounts(Creature? creature, ICombatState? combatState, float[] buffer, int offset)
+    private static void HistoryCounts(Creature? creature, ICombatState? combatState, float[] buffer, ref int offset)
     {
         if (creature == null) return;
         var entries = CombatManager.Instance.History.Entries;
@@ -752,7 +736,6 @@ public partial class RunSimulator
             buffer[currentOffset++] = total;
         }
 
-        // Now simply call them in order. 
         WriteCounts<BlockGainedEntry>(e => e.Actor == creature);
         WriteCounts<CardAfflictedEntry>(e => e.Actor == creature);
         WriteCounts<CardDiscardedEntry>(e => e.Actor == creature);
@@ -771,13 +754,9 @@ public partial class RunSimulator
         WriteCounts<PowerReceivedEntry>(e => e.Applier == creature);
         WriteCounts<StarsModifiedEntry>(e => e.Actor == creature);
         WriteCounts<SummonedEntry>(e => e.Actor == creature);
+        offset = currentOffset;
     }
-    
-    // Each Xxx(...) writer below owns its own field count and advances `offset` past exactly
-    // what it wrote -- for both the real value and the null/"empty slot" case. That means the
-    // field count lives in exactly one place per entity type, so PlayerSummary's loops never
-    // hand-maintain a second copy of it (the old separate zero-fill branches were that second
-    // copy, and they drifted: Card wrote 11 floats but the stride used to advance was 10).
+
 
     private static void Potion(PotionModel? potion, float[] buffer, ref int offset)
     {
@@ -908,8 +887,18 @@ public partial class RunSimulator
         };
     }
 
+    private void RunContext(float[] buffer, ref int offset)
+    {
+        if (_runState == null) return;
+        buffer[offset++] = _runState.CurrentActIndex + 1;
+        buffer[offset++] = _tokenizer.Encode("acts", _runState.Act?.Id.Entry ?? "OVERGROWTH");
+        buffer[offset++] = _runState.ActFloor;
+        buffer[offset++] = _tokenizer.Encode("encounters", _runState.Act?.BossEncounter?.Id?.Entry ?? "NONE");
+        buffer[offset++] = _tokenizer.Encode("encounters", _runState.Act?.SecondBossEncounter?.Id?.Entry ?? "NONE");
+    }
+
     /// <summary>Common context added to every decision point.</summary>
-    private Dictionary<string, object?> RunContext()
+    private Dictionary<string, object?> RunContextJson()
     {
         if (_runState == null) return new();
         var ctx = new Dictionary<string, object?>
@@ -1870,7 +1859,7 @@ public partial class RunSimulator
         return new Dictionary<string, object?>
         {
             ["type"] = "map",
-            ["context"] = RunContext(),
+            ["context"] = RunContextJson(),
             ["rows"] = rows,
             ["boss"] = bossNode,
             ["current_coord"] = currentCoord.HasValue ? new Dictionary<string, object?>

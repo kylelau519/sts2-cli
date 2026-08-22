@@ -48,7 +48,7 @@ public partial class RunSimulator
             {
                 ["type"] = "decision",
                 ["decision"] = "bundle_select",
-                ["context"] = RunContext(),
+                ["context"] = RunContextJson(),
                 ["bundles"] = bundles,
                 ["player"] = PlayerSummaryJson(player),
             };
@@ -69,7 +69,7 @@ public partial class RunSimulator
             {
                 ["type"] = "decision",
                 ["decision"] = "card_reward",
-                ["context"] = RunContext(),
+                ["context"] = RunContextJson(),
                 ["cards"] = cards,
                 ["can_skip"] = true,
                 ["from_event"] = true,
@@ -92,7 +92,7 @@ public partial class RunSimulator
             {
                 ["type"] = "decision",
                 ["decision"] = "card_select",
-                ["context"] = RunContext(),
+                ["context"] = RunContextJson(),
                 ["cards"] = opts,
                 ["min_select"] = _cardSelector.PendingMinSelect,
                 ["max_select"] = _cardSelector.PendingMaxSelect,
@@ -186,7 +186,7 @@ public partial class RunSimulator
         {
             ["type"] = "decision",
             ["decision"] = "unknown",
-            ["context"] = RunContext(),
+            ["context"] = RunContextJson(),
             ["room_type"] = room?.GetType().Name,
             ["message"] = "Unknown room type or state",
         };
@@ -267,7 +267,7 @@ public partial class RunSimulator
         {
             ["type"] = "decision",
             ["decision"] = "map_select",
-            ["context"] = RunContext(),
+            ["context"] = RunContextJson(),
             ["choices"] = choices,
             ["player"] = PlayerSummaryJson(_runState!.Players[0]),
             ["act"] = _runState.CurrentActIndex + 1,
@@ -496,7 +496,7 @@ public partial class RunSimulator
         {
             ["type"] = "decision",
             ["decision"] = "combat_play",
-            ["context"] = RunContext(),
+            ["context"] = RunContextJson(),
             ["round"] = combatState?.RoundNumber ?? 0,
             ["energy"] = pcs?.Energy ?? 0,
             ["max_energy"] = pcs?.MaxEnergy ?? 0,
@@ -693,7 +693,7 @@ public partial class RunSimulator
         {
             ["type"] = "decision",
             ["decision"] = "card_reward",
-            ["context"] = RunContext(),
+            ["context"] = RunContextJson(),
             ["cards"] = cards,
             ["can_skip"] = _pendingCardReward.CanSkip,
             ["gold_earned"] = _runState!.Players[0].Gold - _goldBeforeCombat,
@@ -890,7 +890,7 @@ public partial class RunSimulator
         {
             ["type"] = "decision",
             ["decision"] = "event_choice",
-            ["context"] = RunContext(),
+            ["context"] = RunContextJson(),
             ["event_id"] = eventEntry,
             ["event_name"] = eventName,
             ["description"] = eventDesc,
@@ -924,7 +924,7 @@ public partial class RunSimulator
         {
             ["type"] = "decision",
             ["decision"] = "rest_site",
-            ["context"] = RunContext(),
+            ["context"] = RunContextJson(),
             ["options"] = optionList,
             ["player"] = PlayerSummaryJson(player),
         };
@@ -999,7 +999,7 @@ public partial class RunSimulator
         {
             ["type"] = "decision",
             ["decision"] = "shop",
-            ["context"] = RunContext(),
+            ["context"] = RunContextJson(),
             ["cards"] = cards,
             ["relics"] = relics,
             ["potions"] = potions,
@@ -1105,7 +1105,7 @@ public partial class RunSimulator
         {
             ["type"] = "decision",
             ["decision"] = "game_over",
-            ["context"] = RunContext(),
+            ["context"] = RunContextJson(),
             ["victory"] = isVictory,
             ["player"] = summary,
             ["act"] = _runState.CurrentActIndex + 1,

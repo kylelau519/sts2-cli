@@ -13,7 +13,7 @@ namespace Sts2Headless
 
         private static readonly string[] CategoryOrder =
         {
-            "afflictions", "card_keywords", "cards", "enchantments", "encounters",
+            "afflictions", "acts", "card_keywords", "cards", "enchantments", "encounters",
             "events", "intents", "monsters", "orbs", "potions", "powers", "relics",
         };
 
