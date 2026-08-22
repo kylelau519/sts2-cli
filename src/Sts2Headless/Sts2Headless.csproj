@@ -5,8 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RollForward>LatestMajor</RollForward>
-  <RollForward>LatestPatch</RollForward>
-  <!-- </PropertyGroup> -->
+  </PropertyGroup>
 
   <ItemGroup>
     <!-- Our GodotStubs (outputs as GodotSharp.dll to satisfy sts2.dll references) -->

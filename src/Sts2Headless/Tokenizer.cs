@@ -81,7 +81,7 @@ namespace Sts2Headless
             return _reverseTokenMap.TryGetValue(token, out var key) ? key : "UNKNOWN";
         }
 
-        private static void AddCharacterTokens()
+        private void AddCharacterTokens()
         {
             int idx = 0;
             foreach (var character in new[] { "IRONCLAD", "SILENT", "DEFECT", "REGENT", "NECROBINDER" })

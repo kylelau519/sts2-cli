@@ -352,7 +352,7 @@ public partial class RunSimulator
             return new Dictionary<string, object?>
             {
                 ["type"] = "ok",
-                ["player"] = PlayerSummary(player),
+                ["player"] = PlayerSummaryJson(player),
             };
         }
         catch (Exception ex) { return ErrorWithTrace("SetPlayer failed", ex); }
@@ -773,108 +773,81 @@ public partial class RunSimulator
         WriteCounts<SummonedEntry>(e => e.Actor == creature);
     }
     
-    // Write Potion into buffer
-    private static void Potion(PotionModel? potion, float[] buffer, int offset)
+    // Each Xxx(...) writer below owns its own field count and advances `offset` past exactly
+    // what it wrote -- for both the real value and the null/"empty slot" case. That means the
+    // field count lives in exactly one place per entity type, so PlayerSummary's loops never
+    // hand-maintain a second copy of it (the old separate zero-fill branches were that second
+    // copy, and they drifted: Card wrote 11 floats but the stride used to advance was 10).
+
+    private static void Potion(PotionModel? potion, float[] buffer, ref int offset)
     {
-        if (potion == null) return;
-        buffer[offset] = _tokenizer.Encode("potions", potion.Id.Entry);
-        buffer[offset + 1] = potion.TargetType switch
+        buffer[offset++] = potion != null ? _tokenizer.Encode("potions", potion.Id.Entry) : 0;
+        buffer[offset++] = potion?.TargetType switch
         {
-            PotionTargetType.Self => 0,
-            PotionTargetType.Ally => 1,
-            PotionTargetType.Enemy => 2,
+            TargetType.Self => 0,
+            TargetType.AnyAlly => 1,
+            TargetType.AnyEnemy => 2,
             _ => -1
         };
-        
     }
 
-    private static void Relic(RelicModel? relic, float[] buffer, int offset)
+    private static void Relic(RelicModel? relic, float[] buffer, ref int offset)
     {
-        if (relic == null) return;
-        buffer[offset] = _tokenizer.Encode("relics", relic.Id.Entry);
-        buffer[offset + 1] = relic.ShowCounter ? relic.DisplayAmount : -1;
+        buffer[offset++] = relic != null ? _tokenizer.Encode("relics", relic.Id.Entry) : 0;
+        buffer[offset++] = relic is { ShowCounter: true } ? relic.DisplayAmount : -1;
     }
 
-    private static void Card(CardModel? card, float[] buffer, int offset)
+    private static void Card(CardModel? card, float[] buffer, ref int offset)
     {
-        if (card == null) return;
-        buffer[offset] = _tokenizer.Encode("cards", card.Id.Entry);
-        buffer[offset + 1] = card.EnergyCost?.GetResolved() ?? 0;
-        buffer[offset + 2] = (int)card.Type;
-        buffer[offset + 3] = (int)card.Rarity;
-        buffer[offset + 4] = card.IsUpgraded ? 1 : 0;
-        buffer[offset + 5] = card.IsUpgradable ? 1 : 0;
-        buffer[offset + 6] = card.Enchantment != null ? _tokenizer.Encode("enchantments", card.Enchantment.Id.Entry) : -1;
-        buffer[offset + 7] = card.Enchantment != null ? card.Enchantment.Amount : -1;
-        buffer[offset + 8] = card.Affliction != null ? _tokenizer.Encode("afflictions", card.Affliction.Id.Entry) : -1;
-        buffer[offset + 9] = card.Affliction != null ? card.Affliction.Amount : -1;
+        buffer[offset++] = card != null ? _tokenizer.Encode("cards", card.Id.Entry) : 0;
+        buffer[offset++] = card?.EnergyCost?.GetResolved() ?? 0;
+        buffer[offset++] = card != null ? (int)card.Type : 0;
+        buffer[offset++] = card != null ? (int)card.Rarity : 0;
+        buffer[offset++] = card is { IsUpgraded: true } ? 1 : 0;
+        buffer[offset++] = card is { IsUpgradable: true } ? 1 : 0;
+        buffer[offset++] = card?.Enchantment != null ? _tokenizer.Encode("enchantments", card.Enchantment.Id.Entry) : -1;
+        buffer[offset++] = card?.Enchantment?.Amount ?? -1;
+        buffer[offset++] = card?.Affliction != null ? _tokenizer.Encode("afflictions", card.Affliction.Id.Entry) : -1;
+        buffer[offset++] = card?.Affliction?.Amount ?? -1;
         int kwMask = 0;
-        if (card.Keywords.Contains(CardKeyword.Exhaust))    kwMask |= 1 << 0;
-        if (card.Keywords.Contains(CardKeyword.Ethereal))   kwMask |= 1 << 1;
-        if (card.Keywords.Contains(CardKeyword.Innate))     kwMask |= 1 << 2;
-        if (card.Keywords.Contains(CardKeyword.Unplayable)) kwMask |= 1 << 3;
-        if (card.Keywords.Contains(CardKeyword.Retain))     kwMask |= 1 << 4;
-        if (card.Keywords.Contains(CardKeyword.Sly))        kwMask |= 1 << 5;
-        if (card.Keywords.Contains(CardKeyword.Eternal))    kwMask |= 1 << 6;
-        buffer[offset + 10] = kwMask;
+        if (card != null)
+        {
+            if (card.Keywords.Contains(CardKeyword.Exhaust))    kwMask |= 1 << 0;
+            if (card.Keywords.Contains(CardKeyword.Ethereal))   kwMask |= 1 << 1;
+            if (card.Keywords.Contains(CardKeyword.Innate))     kwMask |= 1 << 2;
+            if (card.Keywords.Contains(CardKeyword.Unplayable)) kwMask |= 1 << 3;
+            if (card.Keywords.Contains(CardKeyword.Retain))     kwMask |= 1 << 4;
+            if (card.Keywords.Contains(CardKeyword.Sly))        kwMask |= 1 << 5;
+            if (card.Keywords.Contains(CardKeyword.Eternal))    kwMask |= 1 << 6;
+        }
+        buffer[offset++] = kwMask;
     }
 
-    private static void PlayerSummary(Player player, float[] buffer, int offset)
+    private const int MaxRelics = 40;
+    private const int MaxPotions = 8;
+    private const int MaxHandCards = 50;
+
+    private static void PlayerSummary(Player player, float[] buffer, ref int offset)
     {
         if (player == null) return;
-        buffer[offset] = _tokenizer.Encode("characters", player.Character?.Id.Entry ?? "IRONCLAD");
-        buffer[offset + 1] = player.Creature?.CurrentHp ?? 0;
-        buffer[offset + 2] = player.Creature?.MaxHp ?? 0;
-        buffer[offset + 3] = player.Creature?.Block ?? 0;
-        buffer[offset + 4] = player.Gold;
-        buffer[offset + 5] = player.MaxPotionCount;
-        buffer[offset + 6] = player.Deck?.Cards?.Count(c => c != null) ?? 0;
-        // Only handle first 40 relics
-        int relicBufferSize = 2;
-        for (int i = 0; i < 40; i++)
-        {
-            if (player.Relics != null && i < player.Relics.Count)
-                Relic(player.Relics[i], buffer, offset + 7 + i * reliccBufferSize);
-            else
-            {
-                buffer[offset + 7 + i * relicBufferSize] = 0;
-                buffer[offset + 7 + i * relicBufferSize + 1] = -1;
-            }
-        }
-        // Max potion 8
-        int potionBufferSize = 2;
-        for (int i = 0; i < 8; i++)
-        {
-            if (player.Potions != null && i < player.Potions.Count)
-                Potion(player.Potions[i], buffer, offset + 87 + i * potionBufferSize);
-            else
-            {
-                buffer[offset + 87 + i * potionBufferSize] = 0;
-                buffer[offset + 87 + i * potionBufferSize + 1] = -1;
-            }
-        }
-        // Max hand 50
-        int cardBufferSize = 10;
-        for (int i = 0; i < 50; i++)
-        {
-            if (player.Deck?.Cards != null && i < player.Deck.Cards.Count)
-                Card(player.Deck.Cards[i], buffer, offset + 103 + i * cardBufferSize);
-            else
-            {
-                buffer[offset + 103 + i * cardBufferSize] = 0;
-                buffer[offset + 103 + i * cardBufferSize + 1] = 0;
-                buffer[offset + 103 + i * cardBufferSize + 2] = 0;
-                buffer[offset + 103 + i * cardBufferSize + 3] = 0;
-                buffer[offset + 103 + i * cardBufferSize + 4] = 0;
-                buffer[offset + 103 + i * cardBufferSize + 5] = 0;
-                buffer[offset + 103 + i * cardBufferSize + 6] = -1;
-                buffer[offset + 103 + i * cardBufferSize + 7] = -1;
-                buffer[offset + 103 + i * cardBufferSize + 8] = -1;
-                buffer[offset + 103 + i * cardBufferSize + 9] = -1;
-            }
-        }
+        buffer[offset++] = _tokenizer.Encode("characters", player.Character?.Id.Entry ?? "IRONCLAD");
+        buffer[offset++] = player.Creature?.CurrentHp ?? 0;
+        buffer[offset++] = player.Creature?.MaxHp ?? 0;
+        buffer[offset++] = player.Creature?.Block ?? 0;
+        buffer[offset++] = player.Gold;
+        buffer[offset++] = player.MaxPotionCount;
+        buffer[offset++] = player.Deck?.Cards?.Count(c => c != null) ?? 0;
+
+        for (int i = 0; i < MaxRelics; i++)
+            Relic(player.Relics != null && i < player.Relics.Count ? player.Relics[i] : null, buffer, ref offset);
+
+        for (int i = 0; i < MaxPotions; i++)
+            Potion(player.PotionSlots != null && i < player.PotionSlots.Count ? player.PotionSlots[i] : null, buffer, ref offset);
+
+        for (int i = 0; i < MaxHandCards; i++)
+            Card(player.Deck?.Cards != null && i < player.Deck.Cards.Count ? player.Deck.Cards[i] : null, buffer, ref offset);
     }
-    private Dictionary<string, object?> PlayerSummaryJson(Player player)
+    internal Dictionary<string, object?> PlayerSummaryJson(Player player)
     {
         return new Dictionary<string, object?>
         {

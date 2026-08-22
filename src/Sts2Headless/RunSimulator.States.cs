@@ -50,7 +50,7 @@ public partial class RunSimulator
                 ["decision"] = "bundle_select",
                 ["context"] = RunContext(),
                 ["bundles"] = bundles,
-                ["player"] = PlayerSummary(player),
+                ["player"] = PlayerSummaryJson(player),
             };
         }
 
@@ -73,7 +73,7 @@ public partial class RunSimulator
                 ["cards"] = cards,
                 ["can_skip"] = true,
                 ["from_event"] = true,
-                ["player"] = PlayerSummary(_runState!.Players[0]),
+                ["player"] = PlayerSummaryJson(_runState!.Players[0]),
             };
         }
 
@@ -96,7 +96,7 @@ public partial class RunSimulator
                 ["cards"] = opts,
                 ["min_select"] = _cardSelector.PendingMinSelect,
                 ["max_select"] = _cardSelector.PendingMaxSelect,
-                ["player"] = PlayerSummary(player),
+                ["player"] = PlayerSummaryJson(player),
                 ["source_category"] = _cardSelector.PendingSourceCategory,
                 ["source_id"] = _cardSelector.PendingSourceId,
                 ["prompt_table"] = _cardSelector.PendingPromptTable,
@@ -269,7 +269,7 @@ public partial class RunSimulator
             ["decision"] = "map_select",
             ["context"] = RunContext(),
             ["choices"] = choices,
-            ["player"] = PlayerSummary(_runState!.Players[0]),
+            ["player"] = PlayerSummaryJson(_runState!.Players[0]),
             ["act"] = _runState.CurrentActIndex + 1,
             ["act_name"] = _loc.Act(_runState.Act?.Id.Entry ?? "OVERGROWTH"),
             ["floor"] = _runState.ActFloor,
@@ -502,7 +502,7 @@ public partial class RunSimulator
             ["max_energy"] = pcs?.MaxEnergy ?? 0,
             ["hand"] = hand,
             ["enemies"] = enemies,
-            ["player"] = PlayerSummary(player),
+            ["player"] = PlayerSummaryJson(player),
             ["player_powers"] = playerPowers?.Count > 0 ? playerPowers : null,
             ["draw_pile_count"] = pcs?.DrawPile?.Cards?.Count ?? 0,
             ["discard_pile_count"] = pcs?.DiscardPile?.Cards?.Count ?? 0,
@@ -563,7 +563,7 @@ public partial class RunSimulator
         // cards like Supermassive/Spite/Murder even when those cards aren't currently in hand.
         try
         {
-            var playerHistory = HistoryCounts(player.Creature, combatState);
+            var playerHistory = HistoryCountsJson(player.Creature, combatState);
             var historyEntries = CombatManager.Instance.History.Entries;
             playerHistory["card_created_by_player"] = new Dictionary<string, object?>
             {
@@ -579,7 +579,7 @@ public partial class RunSimulator
                 ["enemies"] = aliveEnemiesForTargeting.Select((c, i) =>
                 {
                     var h = new Dictionary<string, object?> { ["index"] = i };
-                    foreach (var kv in HistoryCounts(c, combatState)) h[kv.Key] = kv.Value;
+                    foreach (var kv in HistoryCountsJson(c, combatState)) h[kv.Key] = kv.Value;
                     return h;
                 }).ToList(),
             };
@@ -697,7 +697,7 @@ public partial class RunSimulator
             ["cards"] = cards,
             ["can_skip"] = _pendingCardReward.CanSkip,
             ["gold_earned"] = _runState!.Players[0].Gold - _goldBeforeCombat,
-            ["player"] = PlayerSummary(_runState!.Players[0]),
+            ["player"] = PlayerSummaryJson(_runState!.Players[0]),
         };
     }
 
@@ -895,7 +895,7 @@ public partial class RunSimulator
             ["event_name"] = eventName,
             ["description"] = eventDesc,
             ["options"] = options,
-            ["player"] = PlayerSummary(_runState!.Players[0]),
+            ["player"] = PlayerSummaryJson(_runState!.Players[0]),
         };
     }
 
@@ -926,7 +926,7 @@ public partial class RunSimulator
             ["decision"] = "rest_site",
             ["context"] = RunContext(),
             ["options"] = optionList,
-            ["player"] = PlayerSummary(player),
+            ["player"] = PlayerSummaryJson(player),
         };
     }
 
@@ -1004,7 +1004,7 @@ public partial class RunSimulator
             ["relics"] = relics,
             ["potions"] = potions,
             ["card_removal_cost"] = removal?.Cost,
-            ["player"] = PlayerSummary(player),
+            ["player"] = PlayerSummaryJson(player),
         };
     }
 
@@ -1097,7 +1097,7 @@ public partial class RunSimulator
     private Dictionary<string, object?> GameOverState(bool isVictory)
     {
         var player = _runState!.Players[0];
-        var summary = PlayerSummary(player);
+        var summary = PlayerSummaryJson(player);
         // BUG-005: When player died, the engine resets HP to max. Use last known HP instead.
         if (!isVictory)
             summary["hp"] = _lastKnownHp > 0 ? 0 : (player.Creature?.CurrentHp ?? 0);

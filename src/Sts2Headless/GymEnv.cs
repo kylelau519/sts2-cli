@@ -52,7 +52,7 @@ namespace Sts2Headless
         public GymEnv()
         {
             _sim = new RunSimulator();
-            _obsBuffer = new float[1024]; 
+            _obsBuffer = new float[2048]; 
             
             var field = typeof(RunSimulator).GetField("_syncCtx", BindingFlags.NonPublic | BindingFlags.Static);
             _syncCtx = field.GetValue(null);
@@ -70,7 +70,7 @@ namespace Sts2Headless
             _sim.StartRun(character, ascension, seed);
             var stateProp = typeof(RunSimulator).GetField("_runState", BindingFlags.NonPublic | BindingFlags.Instance);
             var runState = stateProp.GetValue(_sim) as RunState;
-            var summary = _sim.PlayerSummary(runState.Players[0]);
+            var summary = _sim.PlayerSummaryJson(runState.Players[0]);
             return EncodeObservation(summary);
         }
 
@@ -79,7 +79,7 @@ namespace Sts2Headless
             _sim.EnterRoom("combat", encounterId, null);
             var stateProp = typeof(RunSimulator).GetField("_runState", BindingFlags.NonPublic | BindingFlags.Instance);
             var runState = stateProp.GetValue(_sim) as RunState;
-            var summary = _sim.PlayerSummary(runState.Players[0]);
+            var summary = _sim.PlayerSummaryJson(runState.Players[0]);
             return EncodeObservation(summary);
         }
 
@@ -103,7 +103,7 @@ namespace Sts2Headless
             }
 
             // Directly get the summary dictionary using the internal method you exposed!
-            var summary = _sim.PlayerSummary(player);
+            var summary = _sim.PlayerSummaryJson(player);
             
             // Check if game is over (player dead)
             if (player.Creature.IsDead)
