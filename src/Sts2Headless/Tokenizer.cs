@@ -17,6 +17,10 @@ namespace Sts2Headless
             "events", "intents", "monsters", "orbs", "potions", "powers", "relics",
         };
 
+        // Both LoadCategory and Encode uppercase category+id before building a key (see
+        // ToKey below), so this can stay a plain ordinal dictionary -- every key that reaches it
+        // is already normalized, rather than relying on a case-insensitive comparer to paper over
+        // mismatched casing between the two sides.
         private readonly Dictionary<string, int> _tokenMap = new();
         private readonly Dictionary<int, string> _reverseTokenMap = new();
         private int _nextToken = 1; // 0 reserved for UNKNOWN
@@ -36,6 +40,10 @@ namespace Sts2Headless
 
         private static string DefaultLocalizationDir() => RepoPaths.FindContaining("localization_eng");
 
+        /// <summary>Every key this class stores or looks up goes through here, so category and id
+        /// casing can never drift out of sync between LoadCategory and Encode.</summary>
+        private static string ToKey(string category, string id) => category.ToUpperInvariant() + ":" + id.ToUpperInvariant();
+
         private void LoadCategory(string dir, string category)
         {
             var path = Path.Combine(dir, category + ".json");
@@ -53,7 +61,7 @@ namespace Sts2Headless
 
             foreach (var id in ids)
             {
-                var tokenKey = category + ":" + id;
+                var tokenKey = ToKey(category, id);
                 if (_tokenMap.ContainsKey(tokenKey)) continue;
                 _tokenMap[tokenKey] = _nextToken;
                 _reverseTokenMap[_nextToken] = tokenKey;
@@ -67,7 +75,7 @@ namespace Sts2Headless
         public int Encode(string category, string? id)
         {
             if (string.IsNullOrEmpty(id)) return UnknownToken;
-            return _tokenMap.TryGetValue(category.ToUpperInvariant() + ":" + id.ToUpperInvariant(), out var token) ? token : UnknownToken;
+            return _tokenMap.TryGetValue(ToKey(category, id), out var token) ? token : UnknownToken;
         }
 
         public string Decode(int token)
@@ -80,7 +88,7 @@ namespace Sts2Headless
             int idx = 0;
             foreach (var character in new[] { "IRONCLAD", "SILENT", "DEFECT", "REGENT", "NECROBINDER" })
             {
-                var tokenKey = "CHARACTERS:" + character;
+                var tokenKey = ToKey("characters", character);
                 _tokenMap[tokenKey] = idx;
                 _reverseTokenMap[idx] = tokenKey;
                 idx++;

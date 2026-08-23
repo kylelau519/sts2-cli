@@ -5,6 +5,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RollForward>LatestMinor</RollForward>
+    <!-- Reset()/StartRun() allocate heavily (a full RunState + all-act room/map generation) on
+         every training-loop episode. Workstation GC's default blocking Gen2 collections showed up
+         as multi-hundred-ms Reset() stalls under repeated resets; Server GC parallelizes and
+         throughput-tunes collections for exactly this allocate-a-lot-then-drop-it-all pattern. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>

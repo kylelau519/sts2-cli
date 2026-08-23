@@ -195,8 +195,8 @@ public partial class RunSimulator
             if (player == null)
                 return Error($"Unknown character: {character}");
 
-            var seedStr = seed != null 
-                ? MegaCrit.Sts2.Core.Helpers.SeedHelper.CanonicalizeSeed(seed) 
+            var seedStr = seed != null
+                ? MegaCrit.Sts2.Core.Helpers.SeedHelper.CanonicalizeSeed(seed)
                 : "headless_" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             Log($"Creating RunState with seed={seedStr}");
 
@@ -257,6 +257,136 @@ public partial class RunSimulator
             return ErrorWithTrace("StartRun failed", ex);
         }
     }
+
+    /// <summary>
+    /// Fast-path combat-only reset for training loops: everything StartRun+EnterRoom("combat")
+    /// does, minus the one part they don't need -- generating a real map/room layout for every
+    /// act (measured ~15-30ms of Reset()'s cost, via RunManager.EnterAct -> SetActInternal ->
+    /// GenerateMap). A training episode that always resets straight into the same encounter never
+    /// reads the map, so that work is pure waste on this path.
+    ///
+    /// This isn't a hack: MockSinglePointActMap ("A single-point map specifically used for
+    /// tests") and RunManager.EnterRoomDebug are the game's own test/dev-console fixtures for
+    /// exactly this ("jump a player to a specific encounter" -- see FightConsoleCmd, the "fight"
+    /// dev console command). Skipping GenerateRooms() would risk NREs in code that expects each
+    /// Act's encounter/event pools to be populated (rewards, Ancients, etc.), so that stays; only
+    /// the map-topology generation is skipped, since only the one requested combat is ever
+    /// entered on this path -- also why Neow's blessing selection is skipped rather than
+    /// reproduced: StartRun+EnterCombat already discards it unresolved today (EnterCombat's
+    /// EnterRoom pops whatever room Neow pushed before the caller ever gets a chance to choose).
+    /// </summary>
+    public Dictionary<string, object?> StartRunIntoCombat(string character, int ascension, string? seed, string encounterId)
+    {
+        try
+        {
+            CleanUp();
+            EnsureModelDbInitialized();
+
+            var player = CreatePlayer(character);
+            if (player == null)
+                return Error($"Unknown character: {character}");
+
+            var seedStr = seed != null
+                ? MegaCrit.Sts2.Core.Helpers.SeedHelper.CanonicalizeSeed(seed)
+                : "headless_" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            Log($"Creating RunState with seed={seedStr} (fast combat-only path)");
+
+            _runState = RunState.CreateForTest(
+                players: new[] { player },
+                ascensionLevel: ascension,
+                seed: seedStr
+            );
+            typeof(RunState).GetField("<UnlockState>k__BackingField", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.SetValue(_runState, MegaCrit.Sts2.Core.Unlocks.UnlockState.all);
+
+            var netService = new NetSingleplayerGameService();
+            RunManager.Instance.SetUpTest(_runState, netService);
+            LocalContext.NetId = netService.NetId;
+
+            // The mock map: CurrentActIndex is already 0 from CreateForTest, and Act resolves as
+            // Acts[CurrentActIndex] without needing a generated map, so this is the only map-side
+            // setup EnterRoomInternal/CombatRoom.Enter need.
+            _runState.Map = new MockSinglePointActMap();
+
+            RunManager.Instance.GenerateRooms();
+            RunManager.Instance.Launch();
+
+            if (!_combatEventsRegistered)
+            {
+                CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
+                CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+                _combatEventsRegistered = true;
+            }
+
+            RunManager.Instance.FinalizeStartingRelics().GetAwaiter().GetResult();
+
+            if (!_cardSelectorRegistered)
+            {
+                CardSelectCmd.UseSelector(_cardSelector);
+                _cardSelectorRegistered = true;
+            }
+            BundlePatches._bundleSimRef = this;
+
+            var encModel = ModelDb.GetById<EncounterModel>(new ModelId("ENCOUNTER", encounterId));
+            if (encModel == null) return Error($"Unknown encounter: {encounterId}");
+            var room = new CombatRoom(encModel.ToMutable(), _runState);
+            RunManager.Instance.EnterRoom(room).GetAwaiter().GetResult();
+            _syncCtx.Pump();
+            WaitForActionExecutor();
+
+            return DetectDecisionPoint();
+        }
+        catch (Exception ex)
+        {
+            return ErrorWithTrace("StartRunIntoCombat failed", ex);
+        }
+    }
+
+    /// <summary>
+    /// Cheap episode-boundary reset for training loops that farm one encounter repeatedly: heals
+    /// the player to full HP on the *same* run (same map/act/relics/deck) and re-enters the given
+    /// encounter, instead of tearing down the whole run via StartRun. Measured need: even with a
+    /// policy that wins most fights, Reset()-on-death still ate ~47% of wall time in a 5000-step
+    /// benchmark (31 resets @ ~79ms each vs. ~0.5ms/step) because MapPathPruning's cost doesn't
+    /// shrink just because it's rare -- this sidesteps it entirely by never calling
+    /// StartRun/EnterAct again after the first one.
+    ///
+    /// Uses Creature.HealInternal (the same public heal API relics/potions use) rather than the
+    /// raw reflection field-set SetPlayer uses elsewhere in this file, so a death->alive
+    /// transition fires the game's own hooks (Player.ActivateHooks, the Revived event) instead of
+    /// silently mutating HP underneath them.
+    ///
+    /// Unlike StartRunIntoCombat, this requires a run already in progress (call StartRun/Reset
+    /// once first) -- it deliberately keeps everything about the run except HP, so it's for
+    /// "give me another shot at this fight" resets, not "give me a brand new run."
+    /// </summary>
+    public Dictionary<string, object?> HealAndEnterCombat(string encounterId)
+    {
+        try
+        {
+            if (_runState == null) return Error("No run in progress");
+            var player = _runState.Players[0];
+            var creature = player.Creature;
+            if (creature == null) return Error("Player has no creature");
+
+            if (creature.CurrentHp < creature.MaxHp)
+                creature.HealInternal((decimal)(creature.MaxHp - creature.CurrentHp));
+
+            var encModel = ModelDb.GetById<EncounterModel>(new ModelId("ENCOUNTER", encounterId));
+            if (encModel == null) return Error($"Unknown encounter: {encounterId}");
+            var room = new CombatRoom(encModel.ToMutable(), _runState);
+            RunManager.Instance.EnterRoom(room).GetAwaiter().GetResult();
+            _syncCtx.Pump();
+            WaitForActionExecutor();
+
+            return DetectDecisionPoint();
+        }
+        catch (Exception ex)
+        {
+            return ErrorWithTrace("HealAndEnterCombat failed", ex);
+        }
+    }
+
     private Player? CreatePlayer(string characterName)
     {
         return characterName.ToLowerInvariant() switch

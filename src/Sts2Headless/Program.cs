@@ -122,6 +122,26 @@ class Program
                     cmd.TryGetProperty("seed", out var s) ? s.GetString() : null
                 );
 
+            // Fast combat-only path: skips generating the run's map/act layout entirely (see
+            // RunSimulator.StartRunIntoCombat). Use when the caller only wants the one encounter
+            // and doesn't need act/map state -- e.g. a training loop resetting every episode.
+            case "start_run_into_combat":
+                return sim.StartRunIntoCombat(
+                    cmd.TryGetProperty("character", out var ch2) ? ch2.GetString() ?? "Ironclad" : "Ironclad",
+                    cmd.TryGetProperty("ascension", out var asc2) ? asc2.GetInt32() : 0,
+                    cmd.TryGetProperty("seed", out var s2) ? s2.GetString() : null,
+                    cmd.TryGetProperty("encounter", out var enc2) ? enc2.GetString() ?? "SHRINKER_BEETLE_WEAK" : "SHRINKER_BEETLE_WEAK"
+                );
+
+            // Episode-boundary reset for a run already in progress: heals the player to full HP
+            // on the same run (no new RunState/map) and re-enters the encounter. See
+            // RunSimulator.HealAndEnterCombat -- cheaper than start_run when the caller just wants
+            // another shot at the same fight, not a brand new run.
+            case "heal_and_enter_combat":
+                return sim.HealAndEnterCombat(
+                    cmd.TryGetProperty("encounter", out var enc3) ? enc3.GetString() ?? "SHRINKER_BEETLE_WEAK" : "SHRINKER_BEETLE_WEAK"
+                );
+
             case "action":
             {
                 var action = cmd.GetProperty("action").GetString() ?? "";

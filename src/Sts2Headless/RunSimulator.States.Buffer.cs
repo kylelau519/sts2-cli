@@ -253,9 +253,20 @@ public partial class RunSimulator
                 _buffer[offset++] = c != null && c.CanPlay(out _, out _) ? 1 : 0;
                 _buffer[offset++] = c?.CurrentStarCost ?? 0;
 
-                var stats = c != null ? ResolveHandCardStats(c) : new Dictionary<string, int>();
-                foreach (var key in HandCardStatKeys)
-                    _buffer[offset++] = stats.TryGetValue(key, out var v) ? v : -1;
+                // Empty-slot fast path avoids allocating a throwaway Dictionary for the ~43 unused
+                // hand slots every call -- an empty dict's TryGetValue always misses anyway, so the
+                // result (-1 for every key) is identical, just without the allocation.
+                if (c != null)
+                {
+                    var stats = ResolveHandCardStats(c);
+                    foreach (var key in HandCardStatKeys)
+                        _buffer[offset++] = stats.TryGetValue(key, out var v) ? v : -1;
+                }
+                else
+                {
+                    foreach (var _ in HandCardStatKeys)
+                        _buffer[offset++] = -1;
+                }
 
                 var damageByTarget = c != null ? ResolveHandCardDamageByTarget(c, aliveEnemies, pcs?.Energy ?? 0) : null;
                 for (int ti = 0; ti < MaxEnemies; ti++)

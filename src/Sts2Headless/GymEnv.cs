@@ -86,6 +86,18 @@ namespace Sts2Headless
             return _sim.DetectDecisionPointToBuffer(_obsBuffer);
         }
 
+        public float[] ResetToCombat(string character = "Ironclad", int ascension = 0, string? seed = null, string encounterId = "SHRINKER_BEETLE_WEAK")
+        {
+            _sim.StartRunIntoCombat(character, ascension, seed, encounterId);
+            return _sim.DetectDecisionPointToBuffer(_obsBuffer);
+        }
+
+        public float[] HealAndEnterCombat(string encounterId = "SHRINKER_BEETLE_WEAK")
+        {
+            _sim.HealAndEnterCombat(encounterId);
+            return _sim.DetectDecisionPointToBuffer(_obsBuffer);
+        }
+
         public Tuple<float[], float, bool> Step(int actionType, int arg1 = 0, int arg2 = 0)
         {
             var runState = CurrentRunState;
