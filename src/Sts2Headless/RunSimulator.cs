@@ -1538,6 +1538,38 @@ public partial class RunSimulator
         }
     }
 
+    /// <summary>
+    /// .Player was called by almost everything repeatedly to read the information about the player.
+    /// This created a blocking wall in fast simulations. A cache was added to CombatState to store the player information and avoid recomputing it every time. 
+    /// This patch redirects the calls to .Player to use the cache instead of recomputing it.
+    /// </summary>
+    private static void PatchCombatRosterCache()
+    {
+        try
+        {
+            var harmony = new Harmony("sts2headless.combatrostercache");
+
+            var playerCreaturesGetter = typeof(CombatState).GetProperty(nameof(CombatState.PlayerCreatures))?.GetGetMethod();
+            var playersGetter = typeof(CombatState).GetProperty(nameof(CombatState.Players))?.GetGetMethod();
+            var playerCreaturesPrefix = typeof(CombatRosterCachePatches).GetMethod(nameof(CombatRosterCachePatches.PlayerCreaturesPrefix),
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+            var playersPrefix = typeof(CombatRosterCachePatches).GetMethod(nameof(CombatRosterCachePatches.PlayersPrefix),
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+
+            if (playerCreaturesGetter != null && playerCreaturesPrefix != null)
+                harmony.Patch(playerCreaturesGetter, new HarmonyMethod(playerCreaturesPrefix));
+            if (playersGetter != null && playersPrefix != null)
+                harmony.Patch(playersGetter, new HarmonyMethod(playersPrefix));
+
+            if (playerCreaturesGetter != null && playersGetter != null)
+                Console.Error.WriteLine("[INFO] Patched CombatState.PlayerCreatures/Players to cache instead of recomputing via LINQ every access");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[WARN] Failed to patch CombatState roster cache: {ex.Message}");
+        }
+    }
+
     private static void PatchTaskYield()
     {
         try
@@ -1722,6 +1754,76 @@ public partial class RunSimulator
         {
             _rewardChoice = -1;
             _rewardWait?.Set();
+        }
+    }
+
+    /// <summary>
+    /// CombatState.PlayerCreatures/Players are plain properties, not cached fields:
+    ///   Creatures       => _allies.Concat(_enemies).ToList()
+    ///   PlayerCreatures => Creatures.Where(c => c.IsPlayer).ToList()
+    ///   Players         => PlayerCreatures.Select(c => c.Player).ToList()
+    /// so a single `.Players` read is three chained LINQ allocations, every single time it's
+    /// read. dotnet-trace showed this at ~40% of wall time in a combat-heavy benchmark -- the
+    /// game's own PlayCardAction/AttackCommand/hook-listener pipeline reads .Players repeatedly
+    /// per card resolution (once per hook dispatch), not anything this headless layer calls
+    /// directly.
+    ///
+    /// Caches the two expensive properties (not Creatures itself -- see below) per CombatState
+    /// instance, invalidated by CombatState.CreaturesChanged, which AddCreature/RemoveCreature
+    /// are the only two places in CombatState.cs that fire (confirmed by reading the decompiled
+    /// source) -- the only two places _allies/_enemies membership can change. A creature dying
+    /// doesn't remove it from the roster (only "escaping" does, via RemoveCreature), so the cache
+    /// stays valid across the vast majority of combat -- damage, block, powers, turns.
+    ///
+    /// Rebuilds from the original (unpatched) Creatures getter on a cache miss rather than reading
+    /// Allies directly, so this can't silently diverge from the original semantics even if that
+    /// invariant (player creatures are always on the Allies side) ever changes. Creatures itself
+    /// is deliberately left unpatched: CombatState.cs also has an `_enemies.Sort(...)` call that
+    /// reorders without firing CreaturesChanged, which would make a Creatures-level cache return
+    /// stale ordering -- PlayerCreatures/Players are never called during that reorder, so they
+    /// aren't exposed to it.
+    /// </summary>
+    internal static class CombatRosterCachePatches
+    {
+        private class RosterCache
+        {
+            public List<Creature>? PlayerCreatures;
+            public List<Player>? Players;
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<CombatState, RosterCache> _caches = new();
+
+        private static RosterCache GetOrCreateCache(CombatState state)
+        {
+            if (_caches.TryGetValue(state, out var existing)) return existing;
+            var cache = new RosterCache();
+            _caches.Add(state, cache);
+            state.CreaturesChanged += _ =>
+            {
+                if (_caches.TryGetValue(state, out var c))
+                {
+                    c.PlayerCreatures = null;
+                    c.Players = null;
+                }
+            };
+            return cache;
+        }
+
+        public static bool PlayerCreaturesPrefix(CombatState __instance, ref IReadOnlyList<Creature> __result)
+        {
+            var cache = GetOrCreateCache(__instance);
+            cache.PlayerCreatures ??= __instance.Creatures.Where(c => c.IsPlayer).ToList();
+            __result = cache.PlayerCreatures;
+            return false;
+        }
+
+        public static bool PlayersPrefix(CombatState __instance, ref IReadOnlyList<Player> __result)
+        {
+            var cache = GetOrCreateCache(__instance);
+            cache.PlayerCreatures ??= __instance.Creatures.Where(c => c.IsPlayer).ToList();
+            cache.Players ??= cache.PlayerCreatures.Select(c => c.Player).ToList();
+            __result = cache.Players;
+            return false;
         }
     }
 
@@ -2038,6 +2140,12 @@ public partial class RunSimulator
 
         // Patch FromChooseABundleScreen to use our card selector
         PatchBundleScreen();
+
+        // Cache CombatState.PlayerCreatures/Players -- both recompute via LINQ (Where/Select +
+        // ToList) on every single access with no memoization. Profiling (dotnet-trace) showed
+        // this at ~40% of wall time in a combat-heavy benchmark: the game's own card-play/hook
+        // pipeline hits .Players repeatedly per card resolution. See CombatRosterCachePatches.
+        PatchCombatRosterCache();
 
         var subtypes = MegaCrit.Sts2.Core.Models.AbstractModelSubtypes.All;
         int registered = 0, failed = 0;

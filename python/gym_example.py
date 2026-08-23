@@ -87,16 +87,20 @@ if __name__ == "__main__":
         # crudely plays hand slot 0 at enemy 0 a few times before ending turn -- not a real policy,
         # just enough offense for most fights to end in victory.
         CARDS_PER_TURN = 3
+        # 1,000 steps measures mostly JIT warmup, not steady state (~1.3k steps/s vs. the ~3.4k
+        # steps/s a 30,000-step run settles into once .NET's tiered JIT re-compiles the hot path)
+        # -- large enough to report the throughput a real training loop would actually see.
+        TOTAL_STEPS = 30000
 
-        print("Benchmarking 1,000 steps (play_card + end_turn), heal-and-reenter on death...")
+        print(f"Benchmarking {TOTAL_STEPS} steps (play_card + end_turn), heal-and-reenter on death...")
         start = time.time()
         steps = 0
-        while steps < 1000:
+        while steps < TOTAL_STEPS:
             res = None
             for _ in range(CARDS_PER_TURN):
                 res = env.Step(0, 0, 0)  # play_card: hand slot 0 targeting enemy 0
                 steps += 1
-                if res.Item3 or steps >= 1000:
+                if res.Item3 or steps >= TOTAL_STEPS:
                     break
             else:
                 res = env.Step(1, 0, 0)  # end_turn
