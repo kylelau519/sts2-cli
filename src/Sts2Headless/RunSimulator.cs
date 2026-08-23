@@ -660,7 +660,7 @@ public partial class RunSimulator
             // trusting it -- bounded so a genuinely-stuck fingerprint can't hang forever. Same
             // spin-then-sleep rationale as the executor wait above: the 5-consecutive-match
             // requirement is unchanged, only the per-iteration wait cost is adaptive now.
-            string? last = null;
+            int? last = null;
             int stableStreak = 0;
             const int requiredStable = 5;
             var swStable = Stopwatch.StartNew();
@@ -687,7 +687,13 @@ public partial class RunSimulator
     /// </summary>
     private static void SpinOrSleep(long elapsedMs)
     {
-        if (elapsedMs < 2) Thread.SpinWait(200);
+        // 50, not the original 200: WaitForActionExecutor's stability loop always spins at
+        // least 5 times per call (it has no way to know "stable from the start" without
+        // checking 5 times -- see StabilityFingerprint's doc comment), and it's called on
+        // essentially every action, so profiling (dotnet-trace) showed Thread.SpinWait itself as
+        // ~20% of steady-state wall time. Lower still gives a same-thread continuation a busy-wait
+        // window before falling back to Yield/Sleep; just a smaller one.
+        if (elapsedMs < 2) Thread.SpinWait(50);
         else if (elapsedMs < 10) Thread.Yield();
         else Thread.Sleep(1);
     }
@@ -698,59 +704,70 @@ public partial class RunSimulator
     /// arbitrary decision points, not just combat, so every accessor here is defensive --
     /// something throwing (e.g. mid-transition) degrades to "unknown" rather than blowing up
     /// the calling action.
+    ///
+    /// Combines a HashCode instead of building/joining strings -- this runs up to 5x per
+    /// WaitForActionExecutor call, which itself runs on essentially every action, so profiling
+    /// (dotnet-trace) showed the string/LINQ allocation here as a real chunk of steady-state
+    /// wall time. Same fields, same sensitivity to change (a hash collision is no less safe than
+    /// the original string comparison already was as a "did anything change" heuristic), just
+    /// without allocating a string per card per iteration.
     /// </summary>
-    private string StabilityFingerprint()
+    private int? StabilityFingerprint()
     {
         try
         {
-            if (_runState == null) return "";
+            if (_runState == null) return null;
             var player = _runState.Players[0];
             var pcs = player.PlayerCombatState;
-            var parts = new List<string>
-            {
-                $"hp={player.Creature?.CurrentHp}",
-                $"gold={player.Gold}",
-                // Outside the pcs-gated block on purpose: a relic's async AfterObtained() (e.g.
-                // Precise Scissors' deck-removal card_select) can still be mid-flight on a
-                // background thread pre-combat, when pcs is null and none of the combat-only
-                // fields below would ever go unstable to catch it. Without this, the wait below
-                // can report "stable" before that continuation lands, and if it finishes only
-                // after combat's draw pile is built from the deck, the opening hand depends on a
-                // race instead of being deterministic from seed+actions (see this method's
-                // docstring below on WaitForActionExecutor -- "opening-hand draw pile counts
-                // differing across replays of an identical action log").
-                "deck=" + string.Join(",", player.Deck?.Cards?.Where(c => c != null)
-                                                 .Select(c => c.Id.ToString()) ?? Enumerable.Empty<string>()),
-            };
+
+            var hash = new HashCode();
+            hash.Add(player.Creature?.CurrentHp);
+            hash.Add(player.Gold);
+            // Outside the pcs-gated block on purpose: a relic's async AfterObtained() (e.g.
+            // Precise Scissors' deck-removal card_select) can still be mid-flight on a
+            // background thread pre-combat, when pcs is null and none of the combat-only
+            // fields below would ever go unstable to catch it. Without this, the wait below
+            // can report "stable" before that continuation lands, and if it finishes only
+            // after combat's draw pile is built from the deck, the opening hand depends on a
+            // race instead of being deterministic from seed+actions (see this method's
+            // docstring below on WaitForActionExecutor -- "opening-hand draw pile counts
+            // differing across replays of an identical action log").
+            if (player.Deck?.Cards != null)
+                foreach (var c in player.Deck.Cards)
+                    if (c != null) hash.Add(c.Id);
 
             if (pcs != null)
             {
-                parts.Add($"energy={pcs.Energy}");
-                parts.Add("hand=" + string.Join(",", pcs.Hand?.Cards?.Select(c => c.Id.ToString())
-                                                       ?? Enumerable.Empty<string>()));
-                parts.Add($"draw={pcs.DrawPile?.Cards?.Count}");
-                parts.Add($"discard={pcs.DiscardPile?.Cards?.Count}");
-                parts.Add($"exhaust={pcs.ExhaustPile?.Cards?.Count}");
+                hash.Add(pcs.Energy);
+                if (pcs.Hand?.Cards != null)
+                    foreach (var c in pcs.Hand.Cards) hash.Add(c.Id);
+                hash.Add(pcs.DrawPile?.Cards?.Count);
+                hash.Add(pcs.DiscardPile?.Cards?.Count);
+                hash.Add(pcs.ExhaustPile?.Cards?.Count);
 
                 var combatState = CombatManager.Instance.DebugOnlyGetState();
-                var enemies = combatState?.Enemies?.Where(e => e != null && e.IsAlive)
-                    .Select(e => $"{e.Monster?.Id.Entry}:{e.CurrentHp}:{e.Block}")
-                    ?? Enumerable.Empty<string>();
-                parts.Add("enemies=" + string.Join(",", enemies));
+                if (combatState?.Enemies != null)
+                    foreach (var e in combatState.Enemies)
+                    {
+                        if (e == null || !e.IsAlive) continue;
+                        hash.Add(e.Monster?.Id);
+                        hash.Add(e.CurrentHp);
+                        hash.Add(e.Block);
+                    }
 
                 try
                 {
                     var entries = CombatManager.Instance.History?.Entries;
-                    if (entries != null) parts.Add($"history={entries.Count()}");
+                    if (entries != null) hash.Add(entries.Count());
                 }
                 catch { /* not always available, e.g. right as combat ends */ }
             }
 
-            return string.Join("|", parts);
+            return hash.ToHashCode();
         }
         catch
         {
-            return "";  // can't fingerprint right now -- treat as "unknown", not "changed"
+            return null;  // can't fingerprint right now -- treat as "unknown", not "changed"
         }
     }
 
