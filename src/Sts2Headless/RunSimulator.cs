@@ -169,6 +169,8 @@ public partial class RunSimulator
 
     private static readonly Tokenizer _tokenizer = new();
 
+    #region Runner lifecycle
+
     public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null)
     {
         try
@@ -242,8 +244,21 @@ public partial class RunSimulator
             return ErrorWithTrace("StartRun failed", ex);
         }
     }
+    private Player? CreatePlayer(string characterName)
+    {
+        return characterName.ToLowerInvariant() switch
+        {
+            "ironclad" => Player.CreateForNewRun<Ironclad>(UnlockState.all, 1uL),
+            "silent" => Player.CreateForNewRun<Silent>(UnlockState.all, 1uL),
+            "defect" => Player.CreateForNewRun<Defect>(UnlockState.all, 1uL),
+            "regent" => Player.CreateForNewRun<Regent>(UnlockState.all, 1uL),
+            "necrobinder" => Player.CreateForNewRun<Necrobinder>(UnlockState.all, 1uL),
+            _ => null
+        };
+    }
+    #endregion
 
-    // ─── Test/Debug commands ───
+    #region Debug commands
 
     private static readonly System.Reflection.BindingFlags NonPublic =
         System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
@@ -453,6 +468,7 @@ public partial class RunSimulator
     // Save/Load   → RunSimulator.SaveLoad.cs
     // Actions     → RunSimulator.Actions.cs
     // States      → RunSimulator.States.cs
+    #endregion
 
     #region Helpers
 
@@ -586,20 +602,15 @@ public partial class RunSimulator
         }
         return stats;
     }
+    #endregion
 
+    #region Json parsers
     private static List<string>? KeywordsToJson(CardModel card)
     {
         var kws = card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
         return kws?.Count > 0 ? kws : null;
     }
 
-    /// <summary>
-    /// Serializes a card's static/base-value fields -- shared by every card list that shows base
-    /// values rather than a live combat preview (deck, card_reward, card_select, bundle_select,
-    /// shop, and draw/discard/exhaust piles). NOT used by CombatPlayState's hand builder, which
-    /// resolves DynamicVars against CurrentTarget/CardPreviewMode for live damage/block and needs
-    /// can_play/target_type/damage_by_target -- none of which a static view has or needs.
-    /// </summary>
     private Dictionary<string, object?> CardToJson(
         CardModel card,
         Dictionary<string, object?>? statsOverride = null,
@@ -636,10 +647,6 @@ public partial class RunSimulator
         return result;
     }
 
-    /// <summary>Serializes a CardPile in pile order -- index 0 is next to draw (draw_pile) / most
-    /// recently discarded or exhausted (discard_pile/exhaust_pile). Order is real and meaningful:
-    /// CardPile is backed by an ordered List&lt;CardModel&gt;, and shuffles are discrete RNG events
-    /// (CardPile.RandomizeOrderInternal / CardPileCmd.Shuffle), not lazy per-draw reordering.</summary>
     private List<Dictionary<string, object?>>? PileCardsToJson(CardPile? pile)
     {
         if (pile?.Cards == null) return null;
@@ -686,145 +693,45 @@ public partial class RunSimulator
             ["removed_keywords"] = removedKws.Count > 0 ? removedKws : null,
         };
     }
-    private static readonly string[] HistoryCounterNames =
-    {
-        "block_gained", "card_afflicted", "card_discarded", "card_drawn", "card_exhausted",
-        "card_generated", "card_played", "creature_attacked", "damage_received", "damage_dealt",
-        "energy_spent", "monster_move_performed", "orb_channeled", "potion_used",
-        "power_received", "power_applied", "stars_modified", "summoned",
-    };
 
     /// <summary>Per-creature counts of combat history events, both for the current turn and the
-    /// whole combat so far </summary>
+    /// whole combat so far.</summary>
     private static Dictionary<string, object?> HistoryCountsJson(Creature? creature, ICombatState? combatState)
     {
         if (creature == null) return new();
-        var buffer = new float[HistoryCounterNames.Length * 2];
-        int offset = 0;
-        HistoryCounts(creature, combatState, buffer, ref offset);
+        var entries = CombatManager.Instance.History.Entries;
 
-        var result = new Dictionary<string, object?>();
-        for (int i = 0; i < HistoryCounterNames.Length; i++)
+        Dictionary<string, object?> CountsOf<T>(Func<T, bool> matches) where T : CombatHistoryEntry
         {
-            result[HistoryCounterNames[i]] = new Dictionary<string, object?>
+            var list = entries.OfType<T>().Where(matches).ToList();
+            return new Dictionary<string, object?>
             {
-                ["this_turn"] = (int)buffer[i * 2],
-                ["this_combat"] = (int)buffer[i * 2 + 1],
+                ["this_turn"] = list.Count(e => e.HappenedThisTurn(combatState)),
+                ["this_combat"] = list.Count,
             };
         }
-        return result;
-    }
 
-    private static void HistoryCounts(Creature? creature, ICombatState? combatState, float[] buffer, ref int offset)
-    {
-        if (creature == null) return;
-        var entries = CombatManager.Instance.History.Entries;
-        int currentOffset = offset;
-        void WriteCounts<T>(Func<T, bool> matches) where T : CombatHistoryEntry
+        return new Dictionary<string, object?>
         {
-            int thisTurn = 0;
-            int total = 0;
-            foreach (var entry in entries.OfType<T>().Where(matches))
-            {
-                total++;
-                if (entry.HappenedThisTurn(combatState))
-                {
-                    thisTurn++;
-                }
-            }
-            buffer[currentOffset++] = thisTurn;
-            buffer[currentOffset++] = total;
-        }
-
-        WriteCounts<BlockGainedEntry>(e => e.Actor == creature);
-        WriteCounts<CardAfflictedEntry>(e => e.Actor == creature);
-        WriteCounts<CardDiscardedEntry>(e => e.Actor == creature);
-        WriteCounts<CardDrawnEntry>(e => e.Actor == creature);
-        WriteCounts<CardExhaustedEntry>(e => e.Actor == creature);
-        WriteCounts<CardGeneratedEntry>(e => e.Actor == creature);
-        WriteCounts<CardPlayFinishedEntry>(e => e.Actor == creature);
-        WriteCounts<CreatureAttackedEntry>(e => e.Actor == creature);
-        WriteCounts<DamageReceivedEntry>(e => e.Receiver == creature);
-        WriteCounts<DamageReceivedEntry>(e => e.Dealer == creature);
-        WriteCounts<EnergySpentEntry>(e => e.Actor == creature);
-        WriteCounts<MonsterPerformedMoveEntry>(e => e.Actor == creature);
-        WriteCounts<OrbChanneledEntry>(e => e.Actor == creature);
-        WriteCounts<PotionUsedEntry>(e => e.Actor == creature);
-        WriteCounts<PowerReceivedEntry>(e => e.Actor == creature);
-        WriteCounts<PowerReceivedEntry>(e => e.Applier == creature);
-        WriteCounts<StarsModifiedEntry>(e => e.Actor == creature);
-        WriteCounts<SummonedEntry>(e => e.Actor == creature);
-        offset = currentOffset;
-    }
-
-
-    private static void Potion(PotionModel? potion, float[] buffer, ref int offset)
-    {
-        buffer[offset++] = potion != null ? _tokenizer.Encode("potions", potion.Id.Entry) : 0;
-        buffer[offset++] = potion?.TargetType switch
-        {
-            TargetType.Self => 0,
-            TargetType.AnyAlly => 1,
-            TargetType.AnyEnemy => 2,
-            _ => -1
+            ["block_gained"] = CountsOf<BlockGainedEntry>(e => e.Actor == creature),
+            ["card_afflicted"] = CountsOf<CardAfflictedEntry>(e => e.Actor == creature),
+            ["card_discarded"] = CountsOf<CardDiscardedEntry>(e => e.Actor == creature),
+            ["card_drawn"] = CountsOf<CardDrawnEntry>(e => e.Actor == creature),
+            ["card_exhausted"] = CountsOf<CardExhaustedEntry>(e => e.Actor == creature),
+            ["card_generated"] = CountsOf<CardGeneratedEntry>(e => e.Actor == creature),
+            ["card_played"] = CountsOf<CardPlayFinishedEntry>(e => e.Actor == creature),
+            ["creature_attacked"] = CountsOf<CreatureAttackedEntry>(e => e.Actor == creature),
+            ["damage_received"] = CountsOf<DamageReceivedEntry>(e => e.Receiver == creature),
+            ["damage_dealt"] = CountsOf<DamageReceivedEntry>(e => e.Dealer == creature),
+            ["energy_spent"] = CountsOf<EnergySpentEntry>(e => e.Actor == creature),
+            ["monster_move_performed"] = CountsOf<MonsterPerformedMoveEntry>(e => e.Actor == creature),
+            ["orb_channeled"] = CountsOf<OrbChanneledEntry>(e => e.Actor == creature),
+            ["potion_used"] = CountsOf<PotionUsedEntry>(e => e.Actor == creature),
+            ["power_received"] = CountsOf<PowerReceivedEntry>(e => e.Actor == creature),
+            ["power_applied"] = CountsOf<PowerReceivedEntry>(e => e.Applier == creature),
+            ["stars_modified"] = CountsOf<StarsModifiedEntry>(e => e.Actor == creature),
+            ["summoned"] = CountsOf<SummonedEntry>(e => e.Actor == creature),
         };
-    }
-
-    private static void Relic(RelicModel? relic, float[] buffer, ref int offset)
-    {
-        buffer[offset++] = relic != null ? _tokenizer.Encode("relics", relic.Id.Entry) : 0;
-        buffer[offset++] = relic is { ShowCounter: true } ? relic.DisplayAmount : -1;
-    }
-
-    private static void Card(CardModel? card, float[] buffer, ref int offset)
-    {
-        buffer[offset++] = card != null ? _tokenizer.Encode("cards", card.Id.Entry) : 0;
-        buffer[offset++] = card?.EnergyCost?.GetResolved() ?? 0;
-        buffer[offset++] = card != null ? (int)card.Type : 0;
-        buffer[offset++] = card != null ? (int)card.Rarity : 0;
-        buffer[offset++] = card is { IsUpgraded: true } ? 1 : 0;
-        buffer[offset++] = card is { IsUpgradable: true } ? 1 : 0;
-        buffer[offset++] = card?.Enchantment != null ? _tokenizer.Encode("enchantments", card.Enchantment.Id.Entry) : -1;
-        buffer[offset++] = card?.Enchantment?.Amount ?? -1;
-        buffer[offset++] = card?.Affliction != null ? _tokenizer.Encode("afflictions", card.Affliction.Id.Entry) : -1;
-        buffer[offset++] = card?.Affliction?.Amount ?? -1;
-        int kwMask = 0;
-        if (card != null)
-        {
-            if (card.Keywords.Contains(CardKeyword.Exhaust))    kwMask |= 1 << 0;
-            if (card.Keywords.Contains(CardKeyword.Ethereal))   kwMask |= 1 << 1;
-            if (card.Keywords.Contains(CardKeyword.Innate))     kwMask |= 1 << 2;
-            if (card.Keywords.Contains(CardKeyword.Unplayable)) kwMask |= 1 << 3;
-            if (card.Keywords.Contains(CardKeyword.Retain))     kwMask |= 1 << 4;
-            if (card.Keywords.Contains(CardKeyword.Sly))        kwMask |= 1 << 5;
-            if (card.Keywords.Contains(CardKeyword.Eternal))    kwMask |= 1 << 6;
-        }
-        buffer[offset++] = kwMask;
-    }
-
-    private const int MaxRelics = 40;
-    private const int MaxPotions = 8;
-    private const int MaxHandCards = 50;
-
-    private static void PlayerSummary(Player player, float[] buffer, ref int offset)
-    {
-        if (player == null) return;
-        buffer[offset++] = _tokenizer.Encode("characters", player.Character?.Id.Entry ?? "IRONCLAD");
-        buffer[offset++] = player.Creature?.CurrentHp ?? 0;
-        buffer[offset++] = player.Creature?.MaxHp ?? 0;
-        buffer[offset++] = player.Creature?.Block ?? 0;
-        buffer[offset++] = player.Gold;
-        buffer[offset++] = player.MaxPotionCount;
-        buffer[offset++] = player.Deck?.Cards?.Count(c => c != null) ?? 0;
-
-        for (int i = 0; i < MaxRelics; i++)
-            Relic(player.Relics != null && i < player.Relics.Count ? player.Relics[i] : null, buffer, ref offset);
-
-        for (int i = 0; i < MaxPotions; i++)
-            Potion(player.PotionSlots != null && i < player.PotionSlots.Count ? player.PotionSlots[i] : null, buffer, ref offset);
-
-        for (int i = 0; i < MaxHandCards; i++)
-            Card(player.Deck?.Cards != null && i < player.Deck.Cards.Count ? player.Deck.Cards[i] : null, buffer, ref offset);
     }
     internal Dictionary<string, object?> PlayerSummaryJson(Player player)
     {
@@ -887,16 +794,6 @@ public partial class RunSimulator
         };
     }
 
-    private void RunContext(float[] buffer, ref int offset)
-    {
-        if (_runState == null) return;
-        buffer[offset++] = _runState.CurrentActIndex + 1;
-        buffer[offset++] = _tokenizer.Encode("acts", _runState.Act?.Id.Entry ?? "OVERGROWTH");
-        buffer[offset++] = _runState.ActFloor;
-        buffer[offset++] = _tokenizer.Encode("encounters", _runState.Act?.BossEncounter?.Id?.Entry ?? "NONE");
-        buffer[offset++] = _tokenizer.Encode("encounters", _runState.Act?.SecondBossEncounter?.Id?.Entry ?? "NONE");
-    }
-
     /// <summary>Common context added to every decision point.</summary>
     private Dictionary<string, object?> RunContextJson()
     {
@@ -925,141 +822,276 @@ public partial class RunSimulator
 
         return ctx;
     }
-
-    private static void EnsureModelDbInitialized()
+    public Dictionary<string, object?> GetFullMap()
     {
-        if (_modelDbInitialized) return;
-        _modelDbInitialized = true;
+        if (_runState?.Map == null)
+            return Error("No map available");
 
-        TestMode.IsOn = true;
+        var map = _runState.Map;
+        var rows = new List<List<Dictionary<string, object?>>>();
+        var currentCoord = _runState.CurrentMapCoord;
+        var visited = _runState.VisitedMapCoords;
 
-        // Initialize ModManager state for headless/test mode
-        try
+        for (int row = 0; row < map.GetRowCount(); row++)
         {
-            var stateProp = typeof(MegaCrit.Sts2.Core.Modding.ModManager).GetProperty("State",
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            stateProp?.SetValue(null, MegaCrit.Sts2.Core.Modding.ModManagerState.Skipped);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[WARN] ModManager init: {ex.Message}");
-        }
-
-        // Install inline sync context on main thread
-        SynchronizationContext.SetSynchronizationContext(_syncCtx);
-
-        // Initialize PlatformServices before anything touches PlatformUtil
-        try
-        {
-            // Try to access PlatformUtil to trigger its static init
-            // If it fails, it won't be available but most code checks SteamInitializer.Initialized
-            var _ = MegaCrit.Sts2.Core.Platform.PlatformUtil.PrimaryPlatform;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[WARN] PlatformUtil init: {ex.Message}");
-        }
-
-        // Initialize SaveManager with a dummy profile for save/load support
-        try { SaveManager.Instance.InitProfileId(0); }
-        catch (Exception ex) { Console.Error.WriteLine($"[WARN] SaveManager.InitProfileId: {ex.Message}"); }
-
-        // Initialize PrefsSave (FastMode etc.). build 23372702 reads PrefsSave.FastMode
-        // from many gameplay paths (e.g. Slice.OnPlay anim delay); without this the
-        // PrefsSave getter returns null and those paths NRE.
-        try { SaveManager.Instance.InitPrefsDataForTest(); }
-        catch (Exception ex) { Console.Error.WriteLine($"[WARN] SaveManager.InitPrefsDataForTest: {ex.Message}"); }
-
-        // Initialize progress data for epoch/timeline tracking
-        try { SaveManager.Instance.InitProgressData(); }
-        catch (Exception ex) { Console.Error.WriteLine($"[WARN] InitProgressData: {ex.Message}"); }
-
-        // Install the Task.Yield patch but keep SuppressYield=false by default.
-        // SuppressYield is toggled to true only during EndTurn to prevent boss fight deadlocks.
-        PatchTaskYield();
-
-        // Patch Cmd.Wait to be a no-op in headless mode.
-        // Cmd.Wait(duration) is used for UI animations (e.g., PreviewCardPileAdd during
-        // Vantom's Dismember move adding Wounds). In headless mode, these never complete
-        // because there's no Godot scene tree, causing the ActionExecutor to deadlock.
-        PatchCmdWait();
-
-        // Patch TalkCmd.Play to a no-op (issue #64). Monster speech-bubble VFX during
-        // moves (e.g. BygoneEffigy.WakeMove) NRE in headless and break the enemy turn.
-        PatchTalkCmd();
-
-        // Patch CardSelectCmd.FromXxx to capture the prefs/source it drops before calling
-        // ICardSelector.GetSelectedCards, so HeadlessCardSelector can report *why* a
-        // card_select fired (e.g. True Grit's exhaust-select vs Wish's deck-tutor-select).
-        PatchCardSelectContext();
-
-        // Initialize localization system (needed for events, cards, etc.)
-        InitLocManager();
-
-        // Patch FromChooseABundleScreen to use our card selector
-        PatchBundleScreen();
-
-        var subtypes = MegaCrit.Sts2.Core.Models.AbstractModelSubtypes.All;
-        int registered = 0, failed = 0;
-        for (int i = 0; i < subtypes.Count; i++)
-        {
-            try
+            var rowNodes = new List<Dictionary<string, object?>>();
+            foreach (var point in map.GetPointsInRow(row))
             {
-                ModelDb.Inject(subtypes[i]);
-                registered++;
-            }
-            catch (Exception ex)
-            {
-                failed++;
-                // Only log first few failures to reduce noise
-                if (failed <= 5)
-                    Console.Error.WriteLine($"[WARN] Failed to register {subtypes[i].Name}: {ex.GetType().Name}: {ex.Message}");
-            }
-        }
-        Console.Error.WriteLine($"[INFO] ModelDb: {registered} registered, {failed} failed out of {subtypes.Count}");
-
-        // Ensure UnlockState.all has all epoch IDs unlocked so Neow options generate properly
-        try
-        {
-            var unlockedEpochsField = typeof(MegaCrit.Sts2.Core.Unlocks.UnlockState).GetField("_unlockedEpochIds",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            var epochsHashSet = unlockedEpochsField?.GetValue(MegaCrit.Sts2.Core.Unlocks.UnlockState.all) as HashSet<string>;
-            if (epochsHashSet != null)
-            {
-                foreach (var epochId in MegaCrit.Sts2.Core.Timeline.EpochModel.AllEpochIds)
+                if (point == null) continue;
+                var children = point.Children?.Select(ch => new Dictionary<string, object?>
                 {
-                    epochsHashSet.Add(epochId);
-                }
+                    ["col"] = (int)ch.coord.col,
+                    ["row"] = (int)ch.coord.row,
+                }).ToList();
+
+                var isVisited = visited?.Any(v => v.col == point.coord.col && v.row == point.coord.row) ?? false;
+                var isCurrent = currentCoord.HasValue &&
+                    currentCoord.Value.col == point.coord.col && currentCoord.Value.row == point.coord.row;
+
+                rowNodes.Add(new Dictionary<string, object?>
+                {
+                    ["col"] = (int)point.coord.col,
+                    ["row"] = (int)point.coord.row,
+                    ["type"] = point.PointType.ToString(),
+                    ["children"] = children,
+                    ["visited"] = isVisited,
+                    ["current"] = isCurrent,
+                });
+            }
+            if (rowNodes.Count > 0)
+                rows.Add(rowNodes);
+        }
+
+        // Boss node
+        var bossNode = new Dictionary<string, object?>
+        {
+            ["col"] = (int)map.BossMapPoint.coord.col,
+            ["row"] = (int)map.BossMapPoint.coord.row,
+            ["type"] = map.BossMapPoint.PointType.ToString(),
+        };
+
+        // Add boss name/id — use BossEncounter?.Id?.Entry
+        try
+        {
+            var bossIdEntry = _runState.Act?.BossEncounter?.Id?.Entry;
+            if (!string.IsNullOrEmpty(bossIdEntry))
+            {
+                var monsterKey = bossIdEntry.EndsWith("_BOSS") ? bossIdEntry[..^5] : bossIdEntry;
+                if (monsterKey == "THE_KIN") monsterKey = "KIN_PRIEST";
+                bossNode["id"] = bossIdEntry;
+                bossNode["name"] = _loc.Monster(monsterKey);
             }
         }
         catch { }
 
-        // Initialize net ID serialization cache (needed for combat actions)
-        try
+        return new Dictionary<string, object?>
         {
-            MegaCrit.Sts2.Core.Modding.AssemblyInfo.Init();
-            ModelIdSerializationCache.Init();
-            Console.Error.WriteLine("[INFO] ModelIdSerializationCache initialized");
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[WARN] ModelIdSerializationCache.Init: {ex.Message}");
-        }
-    }
-
-    private Player? CreatePlayer(string characterName)
-    {
-        return characterName.ToLowerInvariant() switch
-        {
-            "ironclad" => Player.CreateForNewRun<Ironclad>(UnlockState.all, 1uL),
-            "silent" => Player.CreateForNewRun<Silent>(UnlockState.all, 1uL),
-            "defect" => Player.CreateForNewRun<Defect>(UnlockState.all, 1uL),
-            "regent" => Player.CreateForNewRun<Regent>(UnlockState.all, 1uL),
-            "necrobinder" => Player.CreateForNewRun<Necrobinder>(UnlockState.all, 1uL),
-            _ => null
+            ["type"] = "map",
+            ["context"] = RunContextJson(),
+            ["rows"] = rows,
+            ["boss"] = bossNode,
+            ["current_coord"] = currentCoord.HasValue ? new Dictionary<string, object?>
+            {
+                ["col"] = (int)currentCoord.Value.col,
+                ["row"] = (int)currentCoord.Value.row,
+            } : null,
         };
     }
 
+    #endregion
+
+    #region buffers readers
+    private static readonly string[] HistoryCounterNames =
+    {
+        "block_gained", "card_afflicted", "card_discarded", "card_drawn", "card_exhausted",
+        "card_generated", "card_played", "creature_attacked", "damage_received", "damage_dealt",
+        "energy_spent", "monster_move_performed", "orb_channeled", "potion_used",
+        "power_received", "power_applied", "stars_modified", "summoned",
+    };
+    private static void HistoryCounts(Creature? creature, ICombatState? combatState, float[] buffer, ref int offset)
+    {
+        if (creature == null) return;
+        var entries = CombatManager.Instance.History.Entries;
+        int currentOffset = offset;
+        void WriteCounts<T>(Func<T, bool> matches) where T : CombatHistoryEntry
+        {
+            int thisTurn = 0;
+            int total = 0;
+            foreach (var entry in entries.OfType<T>().Where(matches))
+            {
+                total++;
+                if (entry.HappenedThisTurn(combatState))
+                {
+                    thisTurn++;
+                }
+            }
+            buffer[currentOffset++] = thisTurn;
+            buffer[currentOffset++] = total;
+        }
+
+        WriteCounts<BlockGainedEntry>(e => e.Actor == creature);
+        WriteCounts<CardAfflictedEntry>(e => e.Actor == creature);
+        WriteCounts<CardDiscardedEntry>(e => e.Actor == creature);
+        WriteCounts<CardDrawnEntry>(e => e.Actor == creature);
+        WriteCounts<CardExhaustedEntry>(e => e.Actor == creature);
+        WriteCounts<CardGeneratedEntry>(e => e.Actor == creature);
+        WriteCounts<CardPlayFinishedEntry>(e => e.Actor == creature);
+        WriteCounts<CreatureAttackedEntry>(e => e.Actor == creature);
+        WriteCounts<DamageReceivedEntry>(e => e.Receiver == creature);
+        WriteCounts<DamageReceivedEntry>(e => e.Dealer == creature);
+        WriteCounts<EnergySpentEntry>(e => e.Actor == creature);
+        WriteCounts<MonsterPerformedMoveEntry>(e => e.Actor == creature);
+        WriteCounts<OrbChanneledEntry>(e => e.Actor == creature);
+        WriteCounts<PotionUsedEntry>(e => e.Actor == creature);
+        WriteCounts<PowerReceivedEntry>(e => e.Actor == creature);
+        WriteCounts<PowerReceivedEntry>(e => e.Applier == creature);
+        WriteCounts<StarsModifiedEntry>(e => e.Actor == creature);
+        WriteCounts<SummonedEntry>(e => e.Actor == creature);
+        offset = currentOffset;
+    }
+    private static void Potion(PotionModel? potion, float[] buffer, ref int offset)
+    {
+        buffer[offset++] = potion != null ? _tokenizer.Encode("potions", potion.Id.Entry) : 0;
+        buffer[offset++] = potion?.TargetType switch
+        {
+            TargetType.Self => 0,
+            TargetType.AnyAlly => 1,
+            TargetType.AnyEnemy => 2,
+            _ => -1
+        };
+    }
+
+    private static void Relic(RelicModel? relic, float[] buffer, ref int offset)
+    {
+        buffer[offset++] = relic != null ? _tokenizer.Encode("relics", relic.Id.Entry) : 0;
+        buffer[offset++] = relic is { ShowCounter: true } ? relic.DisplayAmount : -1;
+    }
+
+    private static void Card(CardModel? card, float[] buffer, ref int offset)
+    {
+        buffer[offset++] = card != null ? _tokenizer.Encode("cards", card.Id.Entry) : 0;
+        buffer[offset++] = card?.EnergyCost?.GetResolved() ?? 0;
+        buffer[offset++] = card != null ? (int)card.Type : 0;
+        buffer[offset++] = card != null ? (int)card.Rarity : 0;
+        buffer[offset++] = card is { IsUpgraded: true } ? 1 : 0;
+        buffer[offset++] = card is { IsUpgradable: true } ? 1 : 0;
+        buffer[offset++] = card?.Enchantment != null ? _tokenizer.Encode("enchantments", card.Enchantment.Id.Entry) : -1;
+        buffer[offset++] = card?.Enchantment?.Amount ?? -1;
+        buffer[offset++] = card?.Affliction != null ? _tokenizer.Encode("afflictions", card.Affliction.Id.Entry) : -1;
+        buffer[offset++] = card?.Affliction?.Amount ?? -1;
+        int kwMask = 0;
+        if (card != null)
+        {
+            if (card.Keywords.Contains(CardKeyword.Exhaust))    kwMask |= 1 << 0;
+            if (card.Keywords.Contains(CardKeyword.Ethereal))   kwMask |= 1 << 1;
+            if (card.Keywords.Contains(CardKeyword.Innate))     kwMask |= 1 << 2;
+            if (card.Keywords.Contains(CardKeyword.Unplayable)) kwMask |= 1 << 3;
+            if (card.Keywords.Contains(CardKeyword.Retain))     kwMask |= 1 << 4;
+            if (card.Keywords.Contains(CardKeyword.Sly))        kwMask |= 1 << 5;
+            if (card.Keywords.Contains(CardKeyword.Eternal))    kwMask |= 1 << 6;
+        }
+        buffer[offset++] = kwMask;
+    }
+
+    private const int MaxRelics = 40;
+    private const int MaxPotions = 8;
+    private const int MaxHandCards = 50;
+    private static void PlayerSummary(Player player, float[] buffer, ref int offset)
+    {
+        if (player == null) return;
+        buffer[offset++] = _tokenizer.Encode("characters", player.Character?.Id.Entry ?? "IRONCLAD");
+        buffer[offset++] = player.Creature?.CurrentHp ?? 0;
+        buffer[offset++] = player.Creature?.MaxHp ?? 0;
+        buffer[offset++] = player.Creature?.Block ?? 0;
+        buffer[offset++] = player.Gold;
+        buffer[offset++] = player.MaxPotionCount;
+        buffer[offset++] = player.Deck?.Cards?.Count(c => c != null) ?? 0;
+
+        for (int i = 0; i < MaxRelics; i++)
+            Relic(player.Relics != null && i < player.Relics.Count ? player.Relics[i] : null, buffer, ref offset);
+
+        for (int i = 0; i < MaxPotions; i++)
+            Potion(player.PotionSlots != null && i < player.PotionSlots.Count ? player.PotionSlots[i] : null, buffer, ref offset);
+
+        for (int i = 0; i < MaxHandCards; i++)
+            Card(player.Deck?.Cards != null && i < player.Deck.Cards.Count ? player.Deck.Cards[i] : null, buffer, ref offset);
+    }
+    private void RunContext(float[] buffer, ref int offset)
+    {
+        if (_runState == null) return;
+        buffer[offset++] = _runState.CurrentActIndex + 1;
+        buffer[offset++] = _tokenizer.Encode("acts", _runState.Act?.Id.Entry ?? "OVERGROWTH");
+        buffer[offset++] = _runState.ActFloor;
+        buffer[offset++] = _tokenizer.Encode("encounters", _runState.Act?.BossEncounter?.Id?.Entry ?? "NONE");
+        buffer[offset++] = _tokenizer.Encode("encounters", _runState.Act?.SecondBossEncounter?.Id?.Entry ?? "NONE");
+    }
+
+    private const int MaxMapCols = 7;
+    private const int MaxMapRows = 20;
+    private const int MaxMapChildren = 3;
+    private const int MapPointFloats = 3 + MaxMapChildren * 2; // type, visited, current, then (col,row) per child
+    private const int MapBufferSize = MaxMapRows * MaxMapCols * MapPointFloats + 2 * MapPointFloats; // Two boss nodes
+
+    /// <summary>Writes one MapPoint's fixed-width slot: type, visited, current, then up to
+    /// MaxMapChildren (col,row) child pairs (-1,-1) padded. A null point (empty grid cell) writes
+    /// an all-empty slot: type=-1, both flags 0, all children (-1,-1).</summary>
+    private static void MapPointToBuffer(MapPoint? point, bool isVisited, bool isCurrent, float[] buffer, ref int offset)
+    {
+        // MapPointType (MegaCrit.Sts2.Core.Map): 0=Unassigned 1=Unknown 2=Shop 3=Treasure
+        // 4=RestSite 5=Monster 6=Elite 7=Boss 8=Ancient -- Ancient is also what StartingMapPoint
+        // is tagged as (confirmed against GetFullMap's JSON output: the row-0 slot marked
+        // visited+current came back as type 8, not a Monster/Unknown room type).
+        buffer[offset++] = point != null ? (int)point.PointType : -1;
+        buffer[offset++] = isVisited ? 1 : 0;
+        buffer[offset++] = isCurrent ? 1 : 0;
+
+        int written = 0;
+        if (point?.Children != null)
+        {
+            foreach (var child in point.Children.OrderBy(c => c.coord.col))
+            {
+                if (written >= MaxMapChildren) break;
+                buffer[offset++] = child.coord.col;
+                buffer[offset++] = child.coord.row;
+                written++;
+            }
+        }
+        for (; written < MaxMapChildren; written++)
+        {
+            buffer[offset++] = -1;
+            buffer[offset++] = -1;
+        }
+    }
+
+    /// <summary>Buffer counterpart to GetFullMap</summary>
+    private void Map(float[] buffer, ref int offset)
+    {
+        var map = _runState?.Map;
+        var currentCoord = _runState?.CurrentMapCoord;
+        var visited = _runState?.VisitedMapCoords;
+        int rowCount = map?.GetRowCount() ?? 0;
+
+        for (int row = 0; row < MaxMapRows; row++)
+        {
+            for (int col = 0; col < MaxMapCols; col++)
+            {
+                var point = row < rowCount ? map!.GetPoint(col, row) : null;
+                bool isVisited = point != null && (visited?.Any(v => v.col == point.coord.col && v.row == point.coord.row) ?? false);
+                bool isCurrent = point != null && currentCoord.HasValue &&
+                    currentCoord.Value.col == point.coord.col && currentCoord.Value.row == point.coord.row;
+                MapPointToBuffer(point, isVisited, isCurrent, buffer, ref offset);
+            }
+        }
+
+        var boss = map?.BossMapPoint;
+        bool bossVisited = boss != null && (visited?.Any(v => v.col == boss.coord.col && v.row == boss.coord.row) ?? false);
+        bool bossCurrent = boss != null && currentCoord.HasValue &&
+            currentCoord.Value.col == boss.coord.col && currentCoord.Value.row == boss.coord.row;
+        MapPointToBuffer(boss, bossVisited, bossCurrent, buffer, ref offset);
+    }
+
+    #endregion
+    #region patches
     private static void PatchCmdWait()
     {
         try
@@ -1690,150 +1722,128 @@ public partial class RunSimulator
         };
     }
 
-    public Dictionary<string, object?> GetFullMap()
+    private static void EnsureModelDbInitialized()
     {
-        if (_runState?.Map == null)
-            return Error("No map available");
+        if (_modelDbInitialized) return;
+        _modelDbInitialized = true;
 
-        var map = _runState.Map;
-        var rows = new List<List<Dictionary<string, object?>>>();
-        var currentCoord = _runState.CurrentMapCoord;
-        var visited = _runState.VisitedMapCoords;
+        TestMode.IsOn = true;
 
-        for (int row = 0; row < map.GetRowCount(); row++)
-        {
-            var rowNodes = new List<Dictionary<string, object?>>();
-            foreach (var point in map.GetPointsInRow(row))
-            {
-                if (point == null) continue;
-                var children = point.Children?.Select(ch => new Dictionary<string, object?>
-                {
-                    ["col"] = (int)ch.coord.col,
-                    ["row"] = (int)ch.coord.row,
-                }).ToList();
-
-                var isVisited = visited?.Any(v => v.col == point.coord.col && v.row == point.coord.row) ?? false;
-                var isCurrent = currentCoord.HasValue &&
-                    currentCoord.Value.col == point.coord.col && currentCoord.Value.row == point.coord.row;
-
-                rowNodes.Add(new Dictionary<string, object?>
-                {
-                    ["col"] = (int)point.coord.col,
-                    ["row"] = (int)point.coord.row,
-                    ["type"] = point.PointType.ToString(),
-                    ["children"] = children,
-                    ["visited"] = isVisited,
-                    ["current"] = isCurrent,
-                });
-            }
-            if (rowNodes.Count > 0)
-                rows.Add(rowNodes);
-        }
-
-        // Boss node
-        var bossNode = new Dictionary<string, object?>
-        {
-            ["col"] = (int)map.BossMapPoint.coord.col,
-            ["row"] = (int)map.BossMapPoint.coord.row,
-            ["type"] = map.BossMapPoint.PointType.ToString(),
-        };
-
-        // Add boss name/id — use BossEncounter?.Id?.Entry
+        // Initialize ModManager state for headless/test mode
         try
         {
-            var bossIdEntry = _runState.Act?.BossEncounter?.Id?.Entry;
-            if (!string.IsNullOrEmpty(bossIdEntry))
+            var stateProp = typeof(MegaCrit.Sts2.Core.Modding.ModManager).GetProperty("State",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            stateProp?.SetValue(null, MegaCrit.Sts2.Core.Modding.ModManagerState.Skipped);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[WARN] ModManager init: {ex.Message}");
+        }
+
+        // Install inline sync context on main thread
+        SynchronizationContext.SetSynchronizationContext(_syncCtx);
+
+        // Initialize PlatformServices before anything touches PlatformUtil
+        try
+        {
+            // Try to access PlatformUtil to trigger its static init
+            // If it fails, it won't be available but most code checks SteamInitializer.Initialized
+            var _ = MegaCrit.Sts2.Core.Platform.PlatformUtil.PrimaryPlatform;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[WARN] PlatformUtil init: {ex.Message}");
+        }
+
+        // Initialize SaveManager with a dummy profile for save/load support
+        try { SaveManager.Instance.InitProfileId(0); }
+        catch (Exception ex) { Console.Error.WriteLine($"[WARN] SaveManager.InitProfileId: {ex.Message}"); }
+
+        // Initialize PrefsSave (FastMode etc.). build 23372702 reads PrefsSave.FastMode
+        // from many gameplay paths (e.g. Slice.OnPlay anim delay); without this the
+        // PrefsSave getter returns null and those paths NRE.
+        try { SaveManager.Instance.InitPrefsDataForTest(); }
+        catch (Exception ex) { Console.Error.WriteLine($"[WARN] SaveManager.InitPrefsDataForTest: {ex.Message}"); }
+
+        // Initialize progress data for epoch/timeline tracking
+        try { SaveManager.Instance.InitProgressData(); }
+        catch (Exception ex) { Console.Error.WriteLine($"[WARN] InitProgressData: {ex.Message}"); }
+
+        // Install the Task.Yield patch but keep SuppressYield=false by default.
+        // SuppressYield is toggled to true only during EndTurn to prevent boss fight deadlocks.
+        PatchTaskYield();
+
+        // Patch Cmd.Wait to be a no-op in headless mode.
+        // Cmd.Wait(duration) is used for UI animations (e.g., PreviewCardPileAdd during
+        // Vantom's Dismember move adding Wounds). In headless mode, these never complete
+        // because there's no Godot scene tree, causing the ActionExecutor to deadlock.
+        PatchCmdWait();
+
+        // Patch TalkCmd.Play to a no-op (issue #64). Monster speech-bubble VFX during
+        // moves (e.g. BygoneEffigy.WakeMove) NRE in headless and break the enemy turn.
+        PatchTalkCmd();
+
+        // Patch CardSelectCmd.FromXxx to capture the prefs/source it drops before calling
+        // ICardSelector.GetSelectedCards, so HeadlessCardSelector can report *why* a
+        // card_select fired (e.g. True Grit's exhaust-select vs Wish's deck-tutor-select).
+        PatchCardSelectContext();
+
+        // Initialize localization system (needed for events, cards, etc.)
+        InitLocManager();
+
+        // Patch FromChooseABundleScreen to use our card selector
+        PatchBundleScreen();
+
+        var subtypes = MegaCrit.Sts2.Core.Models.AbstractModelSubtypes.All;
+        int registered = 0, failed = 0;
+        for (int i = 0; i < subtypes.Count; i++)
+        {
+            try
             {
-                var monsterKey = bossIdEntry.EndsWith("_BOSS") ? bossIdEntry[..^5] : bossIdEntry;
-                if (monsterKey == "THE_KIN") monsterKey = "KIN_PRIEST";
-                bossNode["id"] = bossIdEntry;
-                bossNode["name"] = _loc.Monster(monsterKey);
+                ModelDb.Inject(subtypes[i]);
+                registered++;
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                // Only log first few failures to reduce noise
+                if (failed <= 5)
+                    Console.Error.WriteLine($"[WARN] Failed to register {subtypes[i].Name}: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+        Console.Error.WriteLine($"[INFO] ModelDb: {registered} registered, {failed} failed out of {subtypes.Count}");
+
+        // Ensure UnlockState.all has all epoch IDs unlocked so Neow options generate properly
+        try
+        {
+            var unlockedEpochsField = typeof(MegaCrit.Sts2.Core.Unlocks.UnlockState).GetField("_unlockedEpochIds",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var epochsHashSet = unlockedEpochsField?.GetValue(MegaCrit.Sts2.Core.Unlocks.UnlockState.all) as HashSet<string>;
+            if (epochsHashSet != null)
+            {
+                foreach (var epochId in MegaCrit.Sts2.Core.Timeline.EpochModel.AllEpochIds)
+                {
+                    epochsHashSet.Add(epochId);
+                }
             }
         }
         catch { }
 
-        return new Dictionary<string, object?>
+        // Initialize net ID serialization cache (needed for combat actions)
+        try
         {
-            ["type"] = "map",
-            ["context"] = RunContextJson(),
-            ["rows"] = rows,
-            ["boss"] = bossNode,
-            ["current_coord"] = currentCoord.HasValue ? new Dictionary<string, object?>
-            {
-                ["col"] = (int)currentCoord.Value.col,
-                ["row"] = (int)currentCoord.Value.row,
-            } : null,
-        };
-    }
-
-    // StandardActMap fixes the grid at 7 columns (see StandardActMap._mapWidth); rows vary per
-    // act (ActModel.GetNumberOfRooms + 1) but 20 comfortably covers every act's floor count.
-    // MaxMapChildren caps out-degree per point -- map generation only ever links a point to the
-    // row directly above it via left/straight/right (MapPoint.IsAdjacentLeft/IsAdjacentRight), so
-    // 3 is exact for every grid point. BossMapPoint sits outside the grid and gets its slot below.
-    private const int MaxMapCols = 7;
-    private const int MaxMapRows = 20;
-    private const int MaxMapChildren = 3;
-    private const int MapPointFloats = 3 + MaxMapChildren * 2; // type, visited, current, then (col,row) per child
-    private const int MapBufferSize = MaxMapRows * MaxMapCols * MapPointFloats + 2 * MapPointFloats; // Two boss nodes
-
-    /// <summary>Writes one MapPoint's fixed-width slot: type, visited, current, then up to
-    /// MaxMapChildren (col,row) child pairs (-1,-1) padded. A null point (empty grid cell) writes
-    /// an all-empty slot: type=-1, both flags 0, all children (-1,-1).</summary>
-    private static void MapPointToBuffer(MapPoint? point, bool isVisited, bool isCurrent, float[] buffer, ref int offset)
-    {
-        // MapPointType (MegaCrit.Sts2.Core.Map): 0=Unassigned 1=Unknown 2=Shop 3=Treasure
-        // 4=RestSite 5=Monster 6=Elite 7=Boss 8=Ancient -- Ancient is also what StartingMapPoint
-        // is tagged as (confirmed against GetFullMap's JSON output: the row-0 slot marked
-        // visited+current came back as type 8, not a Monster/Unknown room type).
-        buffer[offset++] = point != null ? (int)point.PointType : -1;
-        buffer[offset++] = isVisited ? 1 : 0;
-        buffer[offset++] = isCurrent ? 1 : 0;
-
-        int written = 0;
-        if (point?.Children != null)
-        {
-            foreach (var child in point.Children.OrderBy(c => c.coord.col))
-            {
-                if (written >= MaxMapChildren) break;
-                buffer[offset++] = child.coord.col;
-                buffer[offset++] = child.coord.row;
-                written++;
-            }
+            MegaCrit.Sts2.Core.Modding.AssemblyInfo.Init();
+            ModelIdSerializationCache.Init();
+            Console.Error.WriteLine("[INFO] ModelIdSerializationCache initialized");
         }
-        for (; written < MaxMapChildren; written++)
+        catch (Exception ex)
         {
-            buffer[offset++] = -1;
-            buffer[offset++] = -1;
+            Console.Error.WriteLine($"[WARN] ModelIdSerializationCache.Init: {ex.Message}");
         }
     }
 
-    /// <summary>Buffer counterpart to GetFullMap</summary>
-    private void Map(float[] buffer, ref int offset)
-    {
-        var map = _runState?.Map;
-        var currentCoord = _runState?.CurrentMapCoord;
-        var visited = _runState?.VisitedMapCoords;
-        int rowCount = map?.GetRowCount() ?? 0;
 
-        for (int row = 0; row < MaxMapRows; row++)
-        {
-            for (int col = 0; col < MaxMapCols; col++)
-            {
-                var point = row < rowCount ? map!.GetPoint(col, row) : null;
-                bool isVisited = point != null && (visited?.Any(v => v.col == point.coord.col && v.row == point.coord.row) ?? false);
-                bool isCurrent = point != null && currentCoord.HasValue &&
-                    currentCoord.Value.col == point.coord.col && currentCoord.Value.row == point.coord.row;
-                MapPointToBuffer(point, isVisited, isCurrent, buffer, ref offset);
-            }
-        }
-
-        var boss = map?.BossMapPoint;
-        bool bossVisited = boss != null && (visited?.Any(v => v.col == boss.coord.col && v.row == boss.coord.row) ?? false);
-        bool bossCurrent = boss != null && currentCoord.HasValue &&
-            currentCoord.Value.col == boss.coord.col && currentCoord.Value.row == boss.coord.row;
-        MapPointToBuffer(boss, bossVisited, bossCurrent, buffer, ref offset);
-    }
 
     public void CleanUp()
     {
