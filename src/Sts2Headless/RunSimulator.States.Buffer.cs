@@ -30,6 +30,26 @@ namespace Sts2Headless;
 
 public partial class RunSimulator
 {
+    /// <summary>Set (scoped, via ExecuteActionToBuffer) so a DetectDecisionPoint() call embedded
+    /// inside DoEndTurn/DoPlayCard/etc.'s own return statements writes into a buffer instead of
+    /// building a JSON dict the caller would just discard -- see DetectDecisionPoint in
+    /// RunSimulator.States.cs.</summary>
+    private BufferStateWriter? _bufferRedirect;
+
+    /// <summary>Buffer counterpart to ExecuteAction -- runs the exact same action logic (DoEndTurn,
+    /// DoPlayCard, ...; nothing here is reimplemented) but redirects the DetectDecisionPoint() call
+    /// those methods make internally to a buffer writer, so a training loop calling this in a tight
+    /// step loop isn't also paying to build and immediately discard a JSON dict every step.</summary>
+    public float[] ExecuteActionToBuffer(string action, Dictionary<string, object?>? args, float[]? buffer = null)
+    {
+        buffer ??= new float[BufferLayout.TotalSize];
+        var previous = _bufferRedirect;
+        _bufferRedirect = new BufferStateWriter(this, buffer);
+        try { ExecuteAction(action, args); }
+        finally { _bufferRedirect = previous; }
+        return buffer;
+    }
+
     /// <summary>Tags buffer[0] so a consumer can dispatch to the right fixed layout without any
     /// other bookkeeping.</summary>
     public enum DecisionType
@@ -314,16 +334,12 @@ public partial class RunSimulator
 
             // Combat history counts (see HistoryCounts doc comment): exposes the scaling inputs for
             // cards like Supermassive/Spite/Murder even when those cards aren't currently in hand.
-            HistoryCounts(player.Creature, combatState, _buffer, ref offset);
-            var historyEntries = CombatManager.Instance.History.Entries;
-            _buffer[offset++] = historyEntries.OfType<CardGeneratedEntry>()
-                .Count(ge => ge.Creator == player && ge.HappenedThisTurn(combatState));
-            _buffer[offset++] = historyEntries.OfType<CardGeneratedEntry>()
-                .Count(ge => ge.Creator == player);
+            _sim.HistoryCounts(player.Creature, combatState, _buffer, ref offset);
+            _sim.WriteHistoryCount(player, "card_generated_by_creator", combatState, _buffer, ref offset);
             for (int i = 0; i < MaxEnemies; i++)
             {
                 var e = i < aliveEnemies.Count ? aliveEnemies[i] : null;
-                HistoryCounts(e, combatState, _buffer, ref offset);
+                _sim.HistoryCounts(e, combatState, _buffer, ref offset);
             }
 
             RefreshPlayerSummary(player);

@@ -116,6 +116,17 @@ public partial class RunSimulator
 
     public Dictionary<string, object?> DetectDecisionPoint()
     {
+        // ExecuteActionToBuffer (RunSimulator.States.Buffer.cs) redirects this call -- which is
+        // embedded inside DoEndTurn/DoPlayCard/etc.'s own return statements -- to a buffer writer
+        // instead of building a JSON dict, so a buffer-mode caller doesn't pay for a JSON dict it
+        // would immediately discard.
+        if (_bufferRedirect != null)
+        {
+            _writer = _bufferRedirect;
+            DetectDecisionPointCore();
+            return _jsonWriter.Dict;
+        }
+
         _writer = _jsonWriter;
         _jsonWriter.Reset();
         DetectDecisionPointCore();

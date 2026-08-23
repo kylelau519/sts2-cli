@@ -944,58 +944,125 @@ public partial class RunSimulator
         "energy_spent", "monster_move_performed", "orb_channeled", "potion_used",
         "power_received", "power_applied", "stars_modified", "summoned",
     };
-    private static void HistoryCounts(Creature? creature, ICombatState? combatState, float[] buffer, ref int offset)
-    {
-        var entries = CombatManager.Instance.History.Entries;
-        int currentOffset = offset;
-        void WriteCounts<T>(Func<T, bool> matches) where T : CombatHistoryEntry
-        {
-            // A null creature (e.g. an enemy slot with no alive enemy in it) still writes its two
-            // padding floats, matching every other empty-slot convention in this file (Card/Relic/
-            // Potion/MapPoint) -- previously this returned before advancing `offset` at all, which
-            // silently desynced every field written after this call for any combat with fewer than
-            // MaxEnemies alive enemies (i.e. almost always).
-            if (creature == null)
-            {
-                buffer[currentOffset++] = -1;
-                buffer[currentOffset++] = -1;
-                return;
-            }
+    // Incremental history-count cache -- HistoryCounts used to rescan the *entire* combat history
+    // (entries.OfType<T>().Where(predicate)) for all 18 categories, for every creature, on every
+    // single decision: profiling showed this was ~95% of per-step cost in a long fight, growing
+    // without bound as history accumulates (O(history length) per call, O(length^2) over a combat).
+    // This folds only the entries added since the last call into running per-(actor,category)
+    // totals, so a call after the first is O(new entries since last time) instead of O(everything
+    // so far). Reset is automatic: CombatHistory.Clear() (a new combat) empties the backing list in
+    // place, and a shrinking Entries.Count is the unambiguous "start over" signal for that.
+    private int _historyProcessedCount;
+    // Side is stored as int (cast from CombatSide), not the enum itself -- an sts2-assembly value
+    // type embedded directly as a field here forced eager type-layout resolution of that assembly
+    // outside the custom AssemblyLoadContext resolver's path and broke loading entirely.
+    private (int Round, int Side, int Turn) _historyTurnIdentity = (-1, -1, -1);
+    private readonly Dictionary<(object Actor, string Category), int> _historyTotalCounts = new();
+    private readonly Dictionary<(object Actor, string Category), int> _historyThisTurnCounts = new();
 
-            int thisTurn = 0;
-            int total = 0;
-            foreach (var entry in entries.OfType<T>().Where(matches))
-            {
-                total++;
-                if (entry.HappenedThisTurn(combatState))
-                {
-                    thisTurn++;
-                }
-            }
-            buffer[currentOffset++] = thisTurn;
-            buffer[currentOffset++] = total;
+    private void RefreshHistoryCache(ICombatState? combatState)
+    {
+        var entries = (IReadOnlyList<CombatHistoryEntry>)CombatManager.Instance.History.Entries;
+        int n = entries.Count;
+
+        if (n < _historyProcessedCount)
+        {
+            _historyProcessedCount = 0;
+            _historyTurnIdentity = (-1, -1, -1);
+            _historyTotalCounts.Clear();
+            _historyThisTurnCounts.Clear();
         }
 
-        WriteCounts<BlockGainedEntry>(e => e.Actor == creature);
-        WriteCounts<CardAfflictedEntry>(e => e.Actor == creature);
-        WriteCounts<CardDiscardedEntry>(e => e.Actor == creature);
-        WriteCounts<CardDrawnEntry>(e => e.Actor == creature);
-        WriteCounts<CardExhaustedEntry>(e => e.Actor == creature);
-        WriteCounts<CardGeneratedEntry>(e => e.Actor == creature);
-        WriteCounts<CardPlayFinishedEntry>(e => e.Actor == creature);
-        WriteCounts<CreatureAttackedEntry>(e => e.Actor == creature);
-        WriteCounts<DamageReceivedEntry>(e => e.Receiver == creature);
-        WriteCounts<DamageReceivedEntry>(e => e.Dealer == creature);
-        WriteCounts<EnergySpentEntry>(e => e.Actor == creature);
-        WriteCounts<MonsterPerformedMoveEntry>(e => e.Actor == creature);
-        WriteCounts<OrbChanneledEntry>(e => e.Actor == creature);
-        WriteCounts<PotionUsedEntry>(e => e.Actor == creature);
-        WriteCounts<PowerReceivedEntry>(e => e.Actor == creature);
-        WriteCounts<PowerReceivedEntry>(e => e.Applier == creature);
-        WriteCounts<StarsModifiedEntry>(e => e.Actor == creature);
-        WriteCounts<SummonedEntry>(e => e.Actor == creature);
-        offset = currentOffset;
+        // "This turn" is finer than "this round" (CombatHistoryEntry.HappenedThisTurn also checks
+        // CurrentSide and each player's TurnNumber), so any of those changing -- not just a round
+        // bump -- invalidates every previously-cached this-turn count.
+        var turnNumber = _runState != null && _runState.Players.Count > 0
+            ? _runState.Players[0].PlayerCombatState?.TurnNumber ?? -1
+            : -1;
+        var identity = (combatState?.RoundNumber ?? -1, (int)(combatState?.CurrentSide ?? 0), turnNumber);
+        if (!identity.Equals(_historyTurnIdentity))
+        {
+            _historyThisTurnCounts.Clear();
+            _historyTurnIdentity = identity;
+        }
+
+        void Bump(object? actor, string category, bool thisTurn)
+        {
+            if (actor == null) return;
+            var key = (actor, category);
+            _historyTotalCounts[key] = _historyTotalCounts.GetValueOrDefault(key) + 1;
+            if (thisTurn) _historyThisTurnCounts[key] = _historyThisTurnCounts.GetValueOrDefault(key) + 1;
+        }
+
+        for (int i = _historyProcessedCount; i < n; i++)
+        {
+            var entry = entries[i];
+            bool thisTurn = entry.HappenedThisTurn(combatState);
+            switch (entry)
+            {
+                case BlockGainedEntry e: Bump(e.Actor, "block_gained", thisTurn); break;
+                case CardAfflictedEntry e: Bump(e.Actor, "card_afflicted", thisTurn); break;
+                case CardDiscardedEntry e: Bump(e.Actor, "card_discarded", thisTurn); break;
+                case CardDrawnEntry e: Bump(e.Actor, "card_drawn", thisTurn); break;
+                case CardExhaustedEntry e: Bump(e.Actor, "card_exhausted", thisTurn); break;
+                case CardGeneratedEntry e:
+                    Bump(e.Actor, "card_generated", thisTurn);
+                    Bump(e.Creator, "card_generated_by_creator", thisTurn);
+                    break;
+                case CardPlayFinishedEntry e: Bump(e.Actor, "card_played", thisTurn); break;
+                case CreatureAttackedEntry e: Bump(e.Actor, "creature_attacked", thisTurn); break;
+                case DamageReceivedEntry e:
+                    Bump(e.Receiver, "damage_received", thisTurn);
+                    Bump(e.Dealer, "damage_dealt", thisTurn);
+                    break;
+                case EnergySpentEntry e: Bump(e.Actor, "energy_spent", thisTurn); break;
+                case MonsterPerformedMoveEntry e: Bump(e.Actor, "monster_move_performed", thisTurn); break;
+                case OrbChanneledEntry e: Bump(e.Actor, "orb_channeled", thisTurn); break;
+                case PotionUsedEntry e: Bump(e.Actor, "potion_used", thisTurn); break;
+                case PowerReceivedEntry e:
+                    Bump(e.Actor, "power_received", thisTurn);
+                    Bump(e.Applier, "power_applied", thisTurn);
+                    break;
+                case StarsModifiedEntry e: Bump(e.Actor, "stars_modified", thisTurn); break;
+                case SummonedEntry e: Bump(e.Actor, "summoned", thisTurn); break;
+            }
+        }
+        _historyProcessedCount = n;
     }
+
+    private void HistoryCounts(Creature? creature, ICombatState? combatState, float[] buffer, ref int offset)
+    {
+        RefreshHistoryCache(combatState);
+
+        // A null creature (e.g. an enemy slot with no alive enemy in it) still writes its two
+        // padding floats, matching every other empty-slot convention in this file (Card/Relic/
+        // Potion/MapPoint) -- desyncing `offset` here would corrupt every field written after.
+        if (creature == null)
+        {
+            offset += HistoryCounterNames.Length * 2;
+            return;
+        }
+
+        foreach (var name in HistoryCounterNames)
+        {
+            var key = ((object)creature, name);
+            buffer[offset++] = _historyThisTurnCounts.GetValueOrDefault(key);
+            buffer[offset++] = _historyTotalCounts.GetValueOrDefault(key);
+        }
+    }
+
+    /// <summary>Direct cache read for the "cards generated by this creator" counts in
+    /// WriteCombatPlay -- keyed by CardGeneratedEntry.Creator (a Player), not Actor/Creature like
+    /// everything else HistoryCounts tracks, so it can't reuse the per-creature loop above, but it
+    /// reads from the same incremental cache instead of its own O(n) scan.</summary>
+    private void WriteHistoryCount(object actor, string category, ICombatState? combatState, float[] buffer, ref int offset)
+    {
+        RefreshHistoryCache(combatState);
+        var key = (actor, category);
+        buffer[offset++] = _historyThisTurnCounts.GetValueOrDefault(key);
+        buffer[offset++] = _historyTotalCounts.GetValueOrDefault(key);
+    }
+
     private static void Potion(PotionModel? potion, float[] buffer, ref int offset)
     {
         buffer[offset++] = potion != null ? _tokenizer.Encode("potions", potion.Id.Entry) : 0;
