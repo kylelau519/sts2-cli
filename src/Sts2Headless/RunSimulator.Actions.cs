@@ -853,7 +853,7 @@ public partial class RunSimulator
         return DetectDecisionPoint();
     }
 
-    private Dictionary<string, object?> DoLeaveRoom(Player player)
+    private void DoLeaveRoomCore(Player player)
     {
         Log("Leaving room");
         try { RunManager.Instance.ProceedFromTerminalRewardsScreen().GetAwaiter().GetResult(); }
@@ -874,7 +874,15 @@ public partial class RunSimulator
             }
             catch (Exception ex) { Log($"Force leave: {ex.Message}"); }
         }
-        return DetectDecisionPoint();
+        DetectDecisionPointCore();
+    }
+
+    private Dictionary<string, object?> DoLeaveRoom(Player player)
+    {
+        _writer = _jsonWriter;
+        _jsonWriter.Reset();
+        DoLeaveRoomCore(player);
+        return _jsonWriter.Dict;
     }
 
     /// <summary>

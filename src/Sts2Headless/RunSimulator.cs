@@ -169,6 +169,19 @@ public partial class RunSimulator
 
     private static readonly Tokenizer _tokenizer = new();
 
+    // Decision-point output sink. DetectDecisionPointCore (and everything it dispatches to) reads
+    // game state exactly once and hands it to whichever writer is active -- _jsonWriter for the
+    // stdio JSON protocol, a BufferStateWriter for the high-speed in-process path. See
+    // RunSimulator.Writers.cs / RunSimulator.Writers.Json.cs / RunSimulator.States.Buffer.cs.
+    private readonly JsonStateWriter _jsonWriter;
+    private IStateWriter _writer = null!;
+
+    public RunSimulator()
+    {
+        _jsonWriter = new JsonStateWriter(this);
+        _writer = _jsonWriter;
+    }
+
     #region Runner lifecycle
 
     public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null)
@@ -910,11 +923,22 @@ public partial class RunSimulator
     };
     private static void HistoryCounts(Creature? creature, ICombatState? combatState, float[] buffer, ref int offset)
     {
-        if (creature == null) return;
         var entries = CombatManager.Instance.History.Entries;
         int currentOffset = offset;
         void WriteCounts<T>(Func<T, bool> matches) where T : CombatHistoryEntry
         {
+            // A null creature (e.g. an enemy slot with no alive enemy in it) still writes its two
+            // padding floats, matching every other empty-slot convention in this file (Card/Relic/
+            // Potion/MapPoint) -- previously this returned before advancing `offset` at all, which
+            // silently desynced every field written after this call for any combat with fewer than
+            // MaxEnemies alive enemies (i.e. almost always).
+            if (creature == null)
+            {
+                buffer[currentOffset++] = -1;
+                buffer[currentOffset++] = -1;
+                return;
+            }
+
             int thisTurn = 0;
             int total = 0;
             foreach (var entry in entries.OfType<T>().Where(matches))
@@ -994,7 +1018,7 @@ public partial class RunSimulator
     }
 
     private const int MaxRelics = 40;
-    private const int MaxPotions = 8;
+    private const int MaxPotions = 10;
     private const int MaxHandCards = 50;
     private static void PlayerSummary(Player player, float[] buffer, ref int offset)
     {
