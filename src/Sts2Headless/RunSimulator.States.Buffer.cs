@@ -334,6 +334,15 @@ public partial class RunSimulator
 
             // Combat history counts (see HistoryCounts doc comment): exposes the scaling inputs for
             // cards like Supermassive/Spite/Murder even when those cards aren't currently in hand.
+            //
+            // Measured tradeoff (2026-08-23): skipping these reads entirely and zero-filling instead
+            // (no RefreshHistoryCache call at all) measured ~528 steps/s vs ~393 steps/s with the
+            // O(1) incremental cache below -- a further ~1.3x on top of the cache, at the cost of
+            // these fields always reading 0 instead of real history-scaling data. Not applied: the
+            // incremental cache already captured the overwhelming majority of the original win (26
+            // steps/s -> 393 before this tradeoff), and zeroing the fields silently misrepresents
+            // state for any card whose scaling depends on them. Revisit only if profiling shows
+            // HistoryCounts is a bottleneck again after other optimizations land.
             _sim.HistoryCounts(player.Creature, combatState, _buffer, ref offset);
             _sim.WriteHistoryCount(player, "card_generated_by_creator", combatState, _buffer, ref offset);
             for (int i = 0; i < MaxEnemies; i++)
