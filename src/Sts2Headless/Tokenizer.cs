@@ -34,13 +34,7 @@ namespace Sts2Headless
             AddCharacterTokens();
         }
 
-        /// <summary>Mirrors LocLookup's base-dir resolution in RunSimulator.cs -- both walk up from
-        /// bin/Debug/net9.0/ to the sts2-cli checkout root, where localization_eng/ lives.</summary>
-        private static string DefaultLocalizationDir()
-        {
-            var baseDir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..");
-            return Path.Combine(baseDir, "localization_eng");
-        }
+        private static string DefaultLocalizationDir() => RepoPaths.FindContaining("localization_eng");
 
         private void LoadCategory(string dir, string category)
         {

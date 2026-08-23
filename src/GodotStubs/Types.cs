@@ -81,8 +81,19 @@ public struct Callable
     public static Callable From(Action action) => new(action);
     public static Callable From<T>(Action<T> action) => new(action);
     public static Callable From<T1, T2>(Action<T1, T2> action) => new(action);
+    public static Callable From<TResult>(Func<TResult> func) => new(func);
 
-    public void Call(params Variant[] args) => (_delegate as Action)?.Invoke();
+    // Action invokes directly; any other zero-arg delegate (e.g. Func<TResult> from
+    // Callable.From<TResult>) is invoked via DynamicInvoke so its side effects (e.g.
+    // TaskCompletionSource.TrySetCanceled() in GameAction.Cancel()) still run instead of
+    // silently no-op'ing -- a silent no-op here left completion sources uncancelled, which
+    // was surfacing as a MissingMethodException further up until the From<TResult> overload
+    // was added, but would otherwise have hung awaits on that completion source.
+    public void Call(params Variant[] args)
+    {
+        if (_delegate is Action a) a.Invoke();
+        else if (_delegate != null && _delegate.Method.GetParameters().Length == 0) _delegate.DynamicInvoke();
+    }
     public void CallDeferred(params Variant[] args) => Call(args);
 }
 

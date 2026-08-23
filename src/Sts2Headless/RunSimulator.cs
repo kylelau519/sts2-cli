@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Combat.History;
@@ -74,8 +75,7 @@ internal class LocLookup
 
     public LocLookup()
     {
-        var baseDir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..");
-        Load(Path.Combine(baseDir, "localization_eng"), _eng);
+        Load(RepoPaths.FindContaining("localization_eng"), _eng);
     }
 
     private static void Load(string dir, Dictionary<string, Dictionary<string, string>> target)
@@ -503,13 +503,20 @@ public partial class RunSimulator
             var executor = RunManager.Instance.ActionExecutor;
             if (executor.IsRunning)
             {
-                // Pump while waiting for executor
-                int maxPumps = 1000;
-                for (int i = 0; i < maxPumps; i++)
+                // Pump while waiting for executor. Task.Yield()/Cmd.Wait() are patched to be
+                // synchronous (see PatchTaskYield/PatchCmdWait), so anything still running here
+                // is either genuine background-thread work (a Task.Run -- see the comment below)
+                // or CPU-bound game logic; either way it usually clears in well under a
+                // millisecond. Spin/yield first so that common case costs microseconds instead of
+                // the OS scheduler's ~1ms sleep granularity, and only fall back to real sleeping
+                // once it's clearly not a fast case, so a genuinely-stuck executor still times out
+                // at roughly the same 1s wall-clock bound as before.
+                var sw = Stopwatch.StartNew();
+                while (executor.IsRunning && sw.ElapsedMilliseconds < 1000)
                 {
                     _syncCtx.Pump();
                     if (!executor.IsRunning) break;
-                    Thread.Sleep(1);
+                    SpinOrSleep(sw.ElapsedMilliseconds);
                 }
             }
 
@@ -520,13 +527,16 @@ public partial class RunSimulator
             // mid-update and the same seed+actions can replay to a different hand next time
             // (observed: opening-hand draw pile counts differing across replays of an identical
             // action log). Re-check a cheap state fingerprint until it stops changing before
-            // trusting it -- bounded so a genuinely-stuck fingerprint can't hang forever.
+            // trusting it -- bounded so a genuinely-stuck fingerprint can't hang forever. Same
+            // spin-then-sleep rationale as the executor wait above: the 5-consecutive-match
+            // requirement is unchanged, only the per-iteration wait cost is adaptive now.
             string? last = null;
             int stableStreak = 0;
             const int requiredStable = 5;
-            for (int i = 0; i < 200 && stableStreak < requiredStable; i++)
+            var swStable = Stopwatch.StartNew();
+            while (stableStreak < requiredStable && swStable.ElapsedMilliseconds < 400)
             {
-                Thread.Sleep(2);
+                SpinOrSleep(swStable.ElapsedMilliseconds);
                 _syncCtx.Pump();
                 var fp = StabilityFingerprint();
                 if (fp == last) stableStreak++;
@@ -537,6 +547,19 @@ public partial class RunSimulator
         {
             Log($"WaitForActionExecutor exception: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Backs off from a tight Pump() spin to a real OS sleep as elapsed time grows, so a
+    /// same-thread continuation that's already available resolves in microseconds while a
+    /// genuinely outstanding background-thread continuation doesn't peg a CPU core for its
+    /// whole wait.
+    /// </summary>
+    private static void SpinOrSleep(long elapsedMs)
+    {
+        if (elapsedMs < 2) Thread.SpinWait(200);
+        else if (elapsedMs < 10) Thread.Yield();
+        else Thread.Sleep(1);
     }
 
     /// <summary>
@@ -1561,7 +1584,7 @@ public partial class RunSimulator
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
             var tables = new Dictionary<string, LocTable>(StringComparer.OrdinalIgnoreCase);
 
-            var locDir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "localization_eng");
+            var locDir = RepoPaths.FindContaining("localization_eng");
             if (Directory.Exists(locDir))
             {
                 foreach (var file in Directory.GetFiles(locDir, "*.json"))

@@ -98,8 +98,21 @@ namespace Sts2Headless
 
             var player = runState.Players[0];
 
-            switch(actionType)
+            // 0 = play_card, 1 = end_turn -- reuses RunSimulator.ExecuteAction (same dispatch
+            // the JSON protocol's "action" command hits) rather than reimplementing the
+            // PlayCardAction/DoEndTurn plumbing here.
+            switch (actionType)
             {
+                case 0:
+                {
+                    var args = new Dictionary<string, object?> { ["card_index"] = arg1 };
+                    if (arg2 >= 0) args["target_index"] = arg2;
+                    _sim.ExecuteAction("play_card", args);
+                    break;
+                }
+                case 1:
+                    _sim.ExecuteAction("end_turn", null);
+                    break;
             }
 
             // Directly get the summary dictionary using the internal method you exposed!
