@@ -1222,6 +1222,7 @@ public partial class RunSimulator
     private const int MaxRelics = 40;
     private const int MaxPotions = 10;
     private const int MaxDeckCard = 50;
+    private const int MaxHandSize = 10;
     private static void PlayerSummary(Player player, float[] buffer, ref int offset)
     {
         if (player == null) return;

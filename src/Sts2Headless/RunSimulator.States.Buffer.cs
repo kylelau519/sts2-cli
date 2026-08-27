@@ -89,9 +89,9 @@ public partial class RunSimulator
         private const int RunContextSize = 5;
 
         public const int CombatPlay = RunContext + RunContextSize;
-        private const int CombatPlaySize = 3717; // +100 vs. the original 3617: one target_type
-        // float and one "cards" HandCardStatKeys entry, each added per hand slot (50 slots), after
-        // this constant was first set -- see the hand-card loop below and HandCardStatKeys above.
+        private const int CombatPlaySize = 2397; // 3 header + 10*HandSlot(33) + 5*Enemy(25) +
+        // 16*PlayerPower(2) + 3 pile-counts + 3*50*Card(11) piles + 10*Orb(3) + orbCapacity(1) +
+        // stars(1) + osty(4) + playerHistory(36) + cardGeneratedByCreator(2) + 5*enemyHistory(36).
 
         public const int CardSelect = CombatPlay + CombatPlaySize;
         private const int CardSelectSize = 552; // minSelect + maxSelect + 50*Card(11)
@@ -245,12 +245,13 @@ public partial class RunSimulator
             _buffer[offset++] = pcs?.Energy ?? 0;
             _buffer[offset++] = pcs?.MaxEnergy ?? 0;
 
-            // Hand: fixed MaxDeckCard slots. Base card fields reuse the Card() encoder; on top of
+            // Hand: fixed MaxHandSize slots (the real hand-size cap, not MaxDeckCard -- a hand
+            // never holds more than 10 cards). Base card fields reuse the Card() encoder; on top of
             // that, a fixed subset of the resolved (buff-adjusted) DynamicVars plus per-target
             // damage against the alive enemies -- both read once via ResolveHandCardStats /
             // ResolveHandCardDamageByTarget, the exact same reads JsonStateWriter uses.
             var handCards = pcs?.Hand?.Cards?.ToList();
-            for (int i = 0; i < MaxDeckCard; i++)
+            for (int i = 0; i < MaxHandSize; i++)
             {
                 var c = handCards != null && i < handCards.Count ? handCards[i] : null;
                 Card(c, _buffer, ref offset);

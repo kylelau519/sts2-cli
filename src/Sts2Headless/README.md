@@ -5,7 +5,7 @@ point into a flat `float[]` instead of the JSON path's `Dictionary<string,object
 string keys, so a training loop can call `RunSimulator.DetectDecisionPointToBuffer(buffer)` in-process on
 every step.
 
-**Every record is exactly `RunSimulator.BufferLayout.TotalSize` (6850) floats, regardless of
+**Every record is exactly `RunSimulator.BufferLayout.TotalSize` (5630) floats, regardless of
 `DecisionType`.** Unlike an earlier version of this format, section offsets are *fixed*: player HP always
 lives at the same index whether the current decision is `combat_play` or `shop`. A consumer never needs to
 branch on `DecisionType` to know where a given field lives — only to know which sections are *freshly
@@ -25,21 +25,21 @@ stable for the lifetime of this wire format:
 | `PlayerSummary` | 1 | 657 | 658 |
 | `Map` | 658 | 1269 | 1927 |
 | `RunContext` | 1927 | 5 | 1932 |
-| `CombatPlay` | 1932 | 3617 | 5549 |
-| `CardSelect` | 5549 | 552 | 6101 |
-| `Shop` | 6101 | 244 | 6345 |
-| `RestSite` | 6345 | 12 | 6357 |
-| `CardReward` | 6357 | 68 | 6425 |
-| `EventChoice` | 6425 | 6 | 6431 |
-| `EventCardReward` | 6431 | 66 | 6497 |
-| `BundleSelect` | 6497 | 352 | 6849 |
-| `GameOver` | 6849 | 1 | 6850 |
-| **Total** | | **6850** | |
+| `CombatPlay` | 1932 | 2397 | 4329 |
+| `CardSelect` | 4329 | 552 | 4881 |
+| `Shop` | 4881 | 244 | 5125 |
+| `RestSite` | 5125 | 12 | 5137 |
+| `CardReward` | 5137 | 68 | 5205 |
+| `EventChoice` | 5205 | 6 | 5211 |
+| `EventCardReward` | 5211 | 66 | 5277 |
+| `BundleSelect` | 5277 | 352 | 5629 |
+| `GameOver` | 5629 | 1 | 5630 |
+| **Total** | | **5630** | |
 
 ## Refresh semantics — what's fresh this call vs. carried over
 
 `BufferStateWriter`'s constructor **deliberately never clears the buffer.** A freshly allocated
-`float[6850]` starts all-zero for free (CLR guarantee), but on every call after that:
+`float[5630]` starts all-zero for free (CLR guarantee), but on every call after that:
 
 - `DecisionType`, `PlayerSummary`, and `RunContext` are refreshed **unconditionally, every call** —
   they're relevant to every decision (player HP/gold/relics/deck, current act/floor/boss).
@@ -126,7 +126,7 @@ get the absolute buffer index).
 | 6 | deck size (non-null card count) |
 | [7 – 86] | 40 × `Relic` slots (`MaxRelics = 40`) |
 | [87 – 106] | 10 × `Potion` slots (`MaxPotions = 10`) |
-| [107 – 656] | 50 × `Card` slots, i.e. the deck (`MaxHandCards = 50`, reused here as the deck cap) |
+| [107 – 656] | 50 × `Card` slots, i.e. the deck (`MaxDeckCard = 50`, reused here as the deck cap) |
 
 ### `Map` (base `BufferLayout.Map` = 658) — 1269 floats
 
@@ -149,43 +149,44 @@ sizing.
 | 3 | boss encounter id (tokenizer `encounters`; `"NONE"` token if absent) |
 | 4 | second boss encounter id (tokenizer `encounters`; `"NONE"` token if absent — branching-boss acts) |
 
-### `CombatPlay` (base `BufferLayout.CombatPlay` = 1932) — 3617 floats
+### `CombatPlay` (base `BufferLayout.CombatPlay` = 1932) — 2397 floats
 
 | Local offset | Field |
 |---|---|
 | 0 | round number |
 | 1 | current energy |
 | 2 | max energy |
-| [3–1552] | hand: 50 slots (`MaxHandCards`) × 31 floats each — see "Hand card slot" below |
-| [1553–1677] | enemies: 5 slots (`MaxEnemies`) × 25 floats each — see "Enemy slot" below |
-| [1678–1709] | player powers: 16 slots (`MaxPlayerPowers`) × 2 floats (power id, amount) |
-| 1710 | draw pile count |
-| 1711 | discard pile count |
-| 1712 | exhaust pile count |
-| [1713–2262] | draw pile: 50 × `Card` (`WritePile`, always pads to `MaxHandCards` regardless of actual pile size) |
-| [2263–2812] | discard pile: 50 × `Card` |
-| [2813–3362] | exhaust pile: 50 × `Card` |
-| [3363–3392] | orbs: 10 slots (`MaxOrbs`) × 3 floats (orb id, `PassiveVal`, `EvokeVal`) |
-| 3393 | orb queue capacity |
-| 3394 | Regent stars (only if character is REGENT, else `-1`) |
-| 3395 | Osty current HP (`-1` if no Osty and not Necrobinder) |
-| 3396 | Osty max HP |
-| 3397 | Osty block |
-| 3398 | Osty alive (1/0), or `0` if Necrobinder with dead/no Osty, or `-1` if not Necrobinder |
-| [3399–3434] | `HistoryCounts` for the player |
-| 3435 | count of cards this player generated this turn |
-| 3436 | count of cards this player generated this combat |
-| [3437–3616] | per enemy (5 slots): `HistoryCounts` each, 36 floats/slot — a dead/absent enemy slot still writes fixed `-1` padding for all 36, same convention as everywhere else (see "Fixed bug" note below) |
+| [3–332] | hand: 10 slots (`MaxHandSize` — the real hand-size cap, distinct from `MaxDeckCard`) × 33 floats each — see "Hand card slot" below |
+| [333–457] | enemies: 5 slots (`MaxEnemies`) × 25 floats each — see "Enemy slot" below |
+| [458–489] | player powers: 16 slots (`MaxPlayerPowers`) × 2 floats (power id, amount) |
+| 490 | draw pile count |
+| 491 | discard pile count |
+| 492 | exhaust pile count |
+| [493–1042] | draw pile: 50 × `Card` (`WritePile`, always pads to `MaxDeckCard` regardless of actual pile size) |
+| [1043–1592] | discard pile: 50 × `Card` |
+| [1593–2142] | exhaust pile: 50 × `Card` |
+| [2143–2172] | orbs: 10 slots (`MaxOrbs`) × 3 floats (orb id, `PassiveVal`, `EvokeVal`) |
+| 2173 | orb queue capacity |
+| 2174 | Regent stars (only if character is REGENT, else `-1`) |
+| 2175 | Osty current HP (`-1` if no Osty and not Necrobinder) |
+| 2176 | Osty max HP |
+| 2177 | Osty block |
+| 2178 | Osty alive (1/0), or `0` if Necrobinder with dead/no Osty, or `-1` if not Necrobinder |
+| [2179–2214] | `HistoryCounts` for the player |
+| 2215 | count of cards this player generated this turn |
+| 2216 | count of cards this player generated this combat |
+| [2217–2396] | per enemy (5 slots): `HistoryCounts` each, 36 floats/slot — a dead/absent enemy slot still writes fixed `-1` padding for all 36, same convention as everywhere else (see "Fixed bug" note below) |
 
-**Hand card slot — 31 floats:**
+**Hand card slot — 33 floats:**
 
 | Local offset | Field |
 |---|---|
 | [0–10] | `Card` |
 | 11 | `CanPlay()` (1/0) |
 | 12 | `CurrentStarCost` |
-| [13–20] | resolved `DynamicVars`, fixed subset (`HandCardStatKeys`, in order): `damage, block, magicnumber, secondarydamage, secondarymagicnumber, calculateddamage, repeat, heal` — each `-1` if the card has no such var |
-| [21–30] | per-target damage against up to 5 alive enemies (`MaxEnemies`): 2 floats each (damage, repeat), `-1,-1` if no such target |
+| 13 | `TargetType` raw enum ordinal (`None=0, Self=1, AnyEnemy=2, AllEnemies=3, RandomEnemy=4, AnyPlayer=5, AnyAlly=6, AllAllies=7, TargetedNoCreature=8, Osty=9`), `-1` if empty slot — needed to tell an `AnyEnemy` card (fan out per-enemy `play_card` options, requires `target_index`) apart from `AllEnemies`/`Self`/`None` (single no-target option); per-target damage below can't disambiguate those on its own since `AllEnemies` cards also populate a damage row per enemy |
+| [14–22] | resolved `DynamicVars`, fixed subset (`HandCardStatKeys`, in order): `damage, block, magicnumber, secondarydamage, secondarymagicnumber, calculateddamage, repeat, heal, cards` — each `-1` if the card has no such var. `cards` is the draw-count var (e.g. Pommel Strike's "draw 1") -- added for Vakuu's MCTS chance-node detection (`mcts.py`'s `draws_cards()`) |
+| [23–32] | per-target damage against up to 5 alive enemies (`MaxEnemies`): 2 floats each (damage, repeat), `-1,-1` if no such target |
 
 **Enemy slot — 25 floats:**
 
@@ -199,15 +200,15 @@ sizing.
 | [5–8] | up to 2 intents (`MaxIntentsPerEnemy`): 2 floats each (`IntentType` int, total attack damage if `AttackIntent` else `-1`), `-1,-1` if no such intent |
 | [9–24] | up to 8 powers (`MaxEnemyPowers`): 2 floats each (power id via tokenizer `powers`, amount), `-1,0` if no such power |
 
-### `CardSelect` (base `BufferLayout.CardSelect` = 5549) — 552 floats
+### `CardSelect` (base `BufferLayout.CardSelect` = 4329) — 552 floats
 
 | Local offset | Field |
 |---|---|
 | 0 | `PendingMinSelect` |
 | 1 | `PendingMaxSelect` |
-| [2–551] | 50 slots (`MaxHandCards`) × `Card` — the pending selection's option list |
+| [2–551] | 50 slots (`MaxDeckCard`) × `Card` — the pending selection's option list |
 
-### `Shop` (base `BufferLayout.Shop` = 6101) — 244 floats
+### `Shop` (base `BufferLayout.Shop` = 4881) — 244 floats
 
 | Local offset | Field |
 |---|---|
@@ -216,13 +217,13 @@ sizing.
 | [228–242] | 5 slots (`MaxShopPotions`) × 3 floats: potion id (tokenizer `potions`), cost, `IsStocked` |
 | 243 | card removal cost, `-1` if unavailable |
 
-### `RestSite` (base `BufferLayout.RestSite` = 6345) — 12 floats
+### `RestSite` (base `BufferLayout.RestSite` = 5125) — 12 floats
 
 | Local offset | Field |
 |---|---|
 | [0–11] | 6 slots (`MaxRestOptions`) × 2 floats: option exists (1/`-1`), `IsEnabled` (1/0/`-1`) |
 
-### `CardReward` (base `BufferLayout.CardReward` = 6357) — 68 floats
+### `CardReward` (base `BufferLayout.CardReward` = 5137) — 68 floats
 
 | Local offset | Field |
 |---|---|
@@ -230,26 +231,26 @@ sizing.
 | 1 | gold gained this combat (`player.Gold - _goldBeforeCombat`) |
 | [2–67] | 6 slots (`MaxRewardCards`) × `Card` |
 
-### `EventChoice` (base `BufferLayout.EventChoice` = 6425) — 6 floats
+### `EventChoice` (base `BufferLayout.EventChoice` = 5205) — 6 floats
 
 | Local offset | Field |
 |---|---|
 | 0 | event id (tokenizer `events`), `-1` if none |
 | [1–5] | 5 slots (`MaxEventOptions`) × `IsLocked` (1/0), `-1` if no such option |
 
-### `EventCardReward` (base `BufferLayout.EventCardReward` = 6431) — 66 floats
+### `EventCardReward` (base `BufferLayout.EventCardReward` = 5211) — 66 floats
 
 | Local offset | Field |
 |---|---|
 | [0–65] | 6 slots (`MaxRewardCards`) × `Card` |
 
-### `BundleSelect` (base `BufferLayout.BundleSelect` = 6497) — 352 floats
+### `BundleSelect` (base `BufferLayout.BundleSelect` = 5277) — 352 floats
 
 | Local offset | Field |
 |---|---|
 | [0–351] | 4 bundles (`MaxBundles`) × 8 cards (`MaxBundleCards`) × `Card` — Scroll Box "pick 1 of N packs" |
 
-### `GameOver` (base `BufferLayout.GameOver` = 6849) — 1 float
+### `GameOver` (base `BufferLayout.GameOver` = 5629) — 1 float
 
 | Local offset | Field |
 |---|---|
@@ -339,6 +340,31 @@ when not currently in hand). A `null` creature (e.g. an absent enemy slot) write
 | 7,8 | child 3 (col,row), `-1,-1` if none |
 
 ---
+
+## Python bindings
+
+`python/buffer_env.py` + `python/buffer_layout.py` are the Python-facing counterpart to this doc --
+`buffer_layout.py`'s offset constants are a hand-maintained mirror of `BufferLayout` (not generated), so a
+layout change here (adding/moving a field, like this doc's `target_type`/`cards` additions) must be
+applied to both sides. `Sts2BufferSession.__init__` asserts `buffer_layout.TOTAL_SIZE` against
+`BufferSession.BufferSize` (the C# constant, read live via pythonnet) on every session construction, so a
+drift between the two fails loudly at the next run instead of silently misreading fields -- but that only
+catches a *size* mismatch, not a field reordered within the same total size, so keep the two in sync by
+hand rather than relying on the assert to catch everything.
+
+`Sts2BufferSession` is the buffer-protocol counterpart to `env.py`'s `Sts2Session` (same
+start/open_from_checkpoint/step/randomize_draw_pile/close shape), but in-process (no subprocess, via
+pythonnet + `BufferSession.cs`) and returning a `BufferDecision` (a numpy view over one decision's record,
+via `buffer_layout.py`'s accessor functions) instead of a JSON-decoded pydantic `Decision`. See
+`buffer_env.py`'s module docstring for why: building that pydantic object graph, not just the
+subprocess/JSON transport `env.py` already addresses, was the measured bottleneck in Vakuu's
+whispering_earring self-play facility (its branch workers / Claws's MCTS search specifically -- the main
+self-play line still uses `env.py`/`Sts2Session`, since it never touches `combat_play` directly).
+
+`RunSimulator.RandomizeDrawPile(int seed)` is the buffer-mode counterpart to `SetDrawOrder` (the JSON
+protocol's `set_draw_order` command): an in-place Fisher-Yates shuffle of the draw pile seeded by an int
+instead of a card-id list, since there's no JSON round-trip in-process to carry ids across and the search
+using it (MCTS chance nodes) only needs determinism given a seed, not a specific bit-for-bit shuffle.
 
 ## Fixed bugs (history, for anyone diffing against an older copy of this doc)
 

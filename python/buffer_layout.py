@@ -43,8 +43,10 @@ POTION_TARGET_TYPES = {0: "Self", 1: "AnyAlly", 2: "AnyEnemy", -1: None}
 
 MAX_RELICS = 40
 MAX_POTIONS = 10
-MAX_HAND_CARDS = 50  # also reused as the deck cap (PlayerSummary) and the draw/discard/exhaust
-                      # pile cap and card_select's option cap -- see each section below
+MAX_DECK_CARDS = 50  # deck cap (PlayerSummary) and the draw/discard/exhaust pile cap and
+                      # card_select's option cap -- see each section below
+MAX_HAND_CARDS = 10  # the real hand-size cap (Sts2 never deals more than 10 cards into a hand) --
+                      # used only for CombatPlay's hand slots, distinct from MAX_DECK_CARDS above
 
 # --- PlayerSummary -- always valid, refreshed on every single decision ---------------------------
 
@@ -59,7 +61,7 @@ _PLAYER_HEADER_SIZE = 7
 _PLAYER_RELICS_OFFSET = _PLAYER_HEADER_SIZE
 _PLAYER_POTIONS_OFFSET = _PLAYER_RELICS_OFFSET + MAX_RELICS * RELIC_SIZE
 _PLAYER_DECK_OFFSET = _PLAYER_POTIONS_OFFSET + MAX_POTIONS * POTION_SIZE
-PLAYER_SUMMARY_SIZE = _PLAYER_DECK_OFFSET + MAX_HAND_CARDS * CARD_SIZE
+PLAYER_SUMMARY_SIZE = _PLAYER_DECK_OFFSET + MAX_DECK_CARDS * CARD_SIZE
 assert PLAYER_SUMMARY_SIZE == 657
 
 MAP_SIZE = 1269
@@ -121,9 +123,9 @@ _CP_ENEMIES_OFFSET = _CP_HAND_OFFSET + MAX_HAND_CARDS * HAND_SLOT_SIZE
 _CP_PLAYER_POWERS_OFFSET = _CP_ENEMIES_OFFSET + MAX_ENEMIES * ENEMY_SLOT_SIZE
 _CP_PILE_COUNTS_OFFSET = _CP_PLAYER_POWERS_OFFSET + MAX_PLAYER_POWERS * 2
 _CP_DRAW_PILE_OFFSET = _CP_PILE_COUNTS_OFFSET + 3
-_CP_DISCARD_PILE_OFFSET = _CP_DRAW_PILE_OFFSET + MAX_HAND_CARDS * CARD_SIZE
-_CP_EXHAUST_PILE_OFFSET = _CP_DISCARD_PILE_OFFSET + MAX_HAND_CARDS * CARD_SIZE
-_CP_ORBS_OFFSET = _CP_EXHAUST_PILE_OFFSET + MAX_HAND_CARDS * CARD_SIZE
+_CP_DISCARD_PILE_OFFSET = _CP_DRAW_PILE_OFFSET + MAX_DECK_CARDS * CARD_SIZE
+_CP_EXHAUST_PILE_OFFSET = _CP_DISCARD_PILE_OFFSET + MAX_DECK_CARDS * CARD_SIZE
+_CP_ORBS_OFFSET = _CP_EXHAUST_PILE_OFFSET + MAX_DECK_CARDS * CARD_SIZE
 _CP_ORB_CAPACITY_OFFSET = _CP_ORBS_OFFSET + MAX_ORBS * 3
 _CP_STARS_OFFSET = _CP_ORB_CAPACITY_OFFSET + 1
 _CP_OSTY_OFFSET = _CP_STARS_OFFSET + 1
@@ -131,13 +133,13 @@ _CP_PLAYER_HISTORY_OFFSET = _CP_OSTY_OFFSET + 4
 _CP_CARD_GENERATED_BY_CREATOR_OFFSET = _CP_PLAYER_HISTORY_OFFSET + HISTORY_CREATURE_SIZE
 _CP_ENEMY_HISTORY_OFFSET = _CP_CARD_GENERATED_BY_CREATOR_OFFSET + 2
 COMBAT_PLAY_SIZE = _CP_ENEMY_HISTORY_OFFSET + MAX_ENEMIES * HISTORY_CREATURE_SIZE
-assert COMBAT_PLAY_SIZE == 3717
+assert COMBAT_PLAY_SIZE == 2397
 
 # --- CardSelect --------------------------------------------------------------------------------
 
 _CS_MIN_SELECT, _CS_MAX_SELECT = 0, 1
 _CS_CARDS_OFFSET = 2
-CARD_SELECT_SIZE = _CS_CARDS_OFFSET + MAX_HAND_CARDS * CARD_SIZE
+CARD_SELECT_SIZE = _CS_CARDS_OFFSET + MAX_DECK_CARDS * CARD_SIZE
 assert CARD_SELECT_SIZE == 552
 
 # --- Shop ----------------------------------------------------------------------------------------
@@ -446,7 +448,7 @@ def select_card_slot(arr: np.ndarray, i: int) -> np.ndarray:
 def select_cards(arr: np.ndarray):
     """Yields (index, slot) for every real (non-padding) offered card -- index is the position to
     pass back in select_cards' `indices` arg."""
-    for i in range(MAX_HAND_CARDS):
+    for i in range(MAX_DECK_CARDS):
         slot = select_card_slot(arr, i)
         if card_token(slot) != 0:
             yield i, slot
