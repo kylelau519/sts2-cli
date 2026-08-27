@@ -245,12 +245,12 @@ public partial class RunSimulator
             _buffer[offset++] = pcs?.Energy ?? 0;
             _buffer[offset++] = pcs?.MaxEnergy ?? 0;
 
-            // Hand: fixed MaxHandCards slots. Base card fields reuse the Card() encoder; on top of
+            // Hand: fixed MaxDeckCard slots. Base card fields reuse the Card() encoder; on top of
             // that, a fixed subset of the resolved (buff-adjusted) DynamicVars plus per-target
             // damage against the alive enemies -- both read once via ResolveHandCardStats /
             // ResolveHandCardDamageByTarget, the exact same reads JsonStateWriter uses.
             var handCards = pcs?.Hand?.Cards?.ToList();
-            for (int i = 0; i < MaxHandCards; i++)
+            for (int i = 0; i < MaxDeckCard; i++)
             {
                 var c = handCards != null && i < handCards.Count ? handCards[i] : null;
                 Card(c, _buffer, ref offset);
@@ -377,7 +377,7 @@ public partial class RunSimulator
 
         private static void WritePile(IReadOnlyList<CardModel>? cards, float[] buffer, ref int offset)
         {
-            for (int i = 0; i < MaxHandCards; i++)
+            for (int i = 0; i < MaxDeckCard; i++)
                 Card(cards != null && i < cards.Count ? cards[i] : null, buffer, ref offset);
         }
 
@@ -512,7 +512,7 @@ public partial class RunSimulator
             var opts = cardSelector.PendingOptions!;
             _buffer[offset++] = cardSelector.PendingMinSelect;
             _buffer[offset++] = cardSelector.PendingMaxSelect;
-            for (int i = 0; i < MaxHandCards; i++)
+            for (int i = 0; i < MaxDeckCard; i++)
                 Card(i < opts.Count ? opts[i] : null, _buffer, ref offset);
 
             RefreshPlayerSummary(_sim._runState!.Players[0]);
