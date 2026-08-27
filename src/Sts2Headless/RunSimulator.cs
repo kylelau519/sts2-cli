@@ -168,6 +168,7 @@ public partial class RunSimulator
     private static bool _combatEventsRegistered;
 
     private static readonly Tokenizer _tokenizer = new();
+    public static string ExportTokenMap() => _tokenizer.ExportJson();
 
     // Decision-point output sink. DetectDecisionPointCore (and everything it dispatches to) reads
     // game state exactly once and hands it to whichever writer is active -- _jsonWriter for the
@@ -261,19 +262,7 @@ public partial class RunSimulator
     /// <summary>
     /// Fast-path combat-only reset for training loops: everything StartRun+EnterRoom("combat")
     /// does, minus the one part they don't need -- generating a real map/room layout for every
-    /// act (measured ~15-30ms of Reset()'s cost, via RunManager.EnterAct -> SetActInternal ->
-    /// GenerateMap). A training episode that always resets straight into the same encounter never
-    /// reads the map, so that work is pure waste on this path.
-    ///
-    /// This isn't a hack: MockSinglePointActMap ("A single-point map specifically used for
-    /// tests") and RunManager.EnterRoomDebug are the game's own test/dev-console fixtures for
-    /// exactly this ("jump a player to a specific encounter" -- see FightConsoleCmd, the "fight"
-    /// dev console command). Skipping GenerateRooms() would risk NREs in code that expects each
-    /// Act's encounter/event pools to be populated (rewards, Ancients, etc.), so that stays; only
-    /// the map-topology generation is skipped, since only the one requested combat is ever
-    /// entered on this path -- also why Neow's blessing selection is skipped rather than
-    /// reproduced: StartRun+EnterCombat already discards it unresolved today (EnterCombat's
-    /// EnterRoom pops whatever room Neow pushed before the caller ever gets a chance to choose).
+    /// act (measured ~15-30ms of Reset()'s cost This is potentially useful if restarting become a blocking wall.
     /// </summary>
     public Dictionary<string, object?> StartRunIntoCombat(string character, int ascension, string? seed, string encounterId)
     {
@@ -345,20 +334,7 @@ public partial class RunSimulator
     /// <summary>
     /// Cheap episode-boundary reset for training loops that farm one encounter repeatedly: heals
     /// the player to full HP on the *same* run (same map/act/relics/deck) and re-enters the given
-    /// encounter, instead of tearing down the whole run via StartRun. Measured need: even with a
-    /// policy that wins most fights, Reset()-on-death still ate ~47% of wall time in a 5000-step
-    /// benchmark (31 resets @ ~79ms each vs. ~0.5ms/step) because MapPathPruning's cost doesn't
-    /// shrink just because it's rare -- this sidesteps it entirely by never calling
-    /// StartRun/EnterAct again after the first one.
-    ///
-    /// Uses Creature.HealInternal (the same public heal API relics/potions use) rather than the
-    /// raw reflection field-set SetPlayer uses elsewhere in this file, so a death->alive
-    /// transition fires the game's own hooks (Player.ActivateHooks, the Revived event) instead of
-    /// silently mutating HP underneath them.
-    ///
-    /// Unlike StartRunIntoCombat, this requires a run already in progress (call StartRun/Reset
-    /// once first) -- it deliberately keeps everything about the run except HP, so it's for
-    /// "give me another shot at this fight" resets, not "give me a brand new run."
+    /// encounter, instead of tearing down the whole run via StartRun. This could be useful if .reset() becomes a blocking wall.
     /// </summary>
     public Dictionary<string, object?> HealAndEnterCombat(string encounterId)
     {
@@ -608,6 +584,23 @@ public partial class RunSimulator
         }
         catch (Exception ex) { return ErrorWithTrace("SetDrawOrder failed", ex); }
     }
+
+    public void RandomizeDrawPile(int seed)
+    {
+        if (_runState == null) return;
+        var pcs = _runState.Players[0].PlayerCombatState;
+        if (pcs?.DrawPile == null) return;
+
+        var drawList = GetBackingList<CardModel>(pcs.DrawPile, "_cards");
+        if (drawList == null) return;
+
+        var rng = new Random(seed);
+        for (int i = drawList.Count - 1; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
+            (drawList[i], drawList[j]) = (drawList[j], drawList[i]);
+        }
+    }
     // Save/Load   → RunSimulator.SaveLoad.cs
     // Actions     → RunSimulator.Actions.cs
     // States      → RunSimulator.States.cs
@@ -687,12 +680,6 @@ public partial class RunSimulator
     /// </summary>
     private static void SpinOrSleep(long elapsedMs)
     {
-        // 50, not the original 200: WaitForActionExecutor's stability loop always spins at
-        // least 5 times per call (it has no way to know "stable from the start" without
-        // checking 5 times -- see StabilityFingerprint's doc comment), and it's called on
-        // essentially every action, so profiling (dotnet-trace) showed Thread.SpinWait itself as
-        // ~20% of steady-state wall time. Lower still gives a same-thread continuation a busy-wait
-        // window before falling back to Yield/Sleep; just a smaller one.
         if (elapsedMs < 2) Thread.SpinWait(50);
         else if (elapsedMs < 10) Thread.Yield();
         else Thread.Sleep(1);
@@ -703,14 +690,7 @@ public partial class RunSimulator
     /// continuation (see the stabilization loop in WaitForActionExecutor above). Read between
     /// arbitrary decision points, not just combat, so every accessor here is defensive --
     /// something throwing (e.g. mid-transition) degrades to "unknown" rather than blowing up
-    /// the calling action.
-    ///
-    /// Combines a HashCode instead of building/joining strings -- this runs up to 5x per
-    /// WaitForActionExecutor call, which itself runs on essentially every action, so profiling
-    /// (dotnet-trace) showed the string/LINQ allocation here as a real chunk of steady-state
-    /// wall time. Same fields, same sensitivity to change (a hash collision is no less safe than
-    /// the original string comparison already was as a "did anything change" heuristic), just
-    /// without allocating a string per card per iteration.
+    /// the calling action. Hashcode is used to speed up, low collision risk.
     /// </summary>
     private int? StabilityFingerprint()
     {
@@ -723,15 +703,7 @@ public partial class RunSimulator
             var hash = new HashCode();
             hash.Add(player.Creature?.CurrentHp);
             hash.Add(player.Gold);
-            // Outside the pcs-gated block on purpose: a relic's async AfterObtained() (e.g.
-            // Precise Scissors' deck-removal card_select) can still be mid-flight on a
-            // background thread pre-combat, when pcs is null and none of the combat-only
-            // fields below would ever go unstable to catch it. Without this, the wait below
-            // can report "stable" before that continuation lands, and if it finishes only
-            // after combat's draw pile is built from the deck, the opening hand depends on a
-            // race instead of being deterministic from seed+actions (see this method's
-            // docstring below on WaitForActionExecutor -- "opening-hand draw pile counts
-            // differing across replays of an identical action log").
+
             if (player.Deck?.Cards != null)
                 foreach (var c in player.Deck.Cards)
                     if (c != null) hash.Add(c.Id);
@@ -1005,6 +977,7 @@ public partial class RunSimulator
 
         return ctx;
     }
+    // Change to GetFullMapJson later
     public Dictionary<string, object?> GetFullMap()
     {
         if (_runState?.Map == null)
@@ -1093,16 +1066,8 @@ public partial class RunSimulator
     };
     // Incremental history-count cache -- HistoryCounts used to rescan the *entire* combat history
     // (entries.OfType<T>().Where(predicate)) for all 18 categories, for every creature, on every
-    // single decision: profiling showed this was ~95% of per-step cost in a long fight, growing
-    // without bound as history accumulates (O(history length) per call, O(length^2) over a combat).
-    // This folds only the entries added since the last call into running per-(actor,category)
-    // totals, so a call after the first is O(new entries since last time) instead of O(everything
-    // so far). Reset is automatic: CombatHistory.Clear() (a new combat) empties the backing list in
-    // place, and a shrinking Entries.Count is the unambiguous "start over" signal for that.
+    // single decision.
     private int _historyProcessedCount;
-    // Side is stored as int (cast from CombatSide), not the enum itself -- an sts2-assembly value
-    // type embedded directly as a field here forced eager type-layout resolution of that assembly
-    // outside the custom AssemblyLoadContext resolver's path and broke loading entirely.
     private (int Round, int Side, int Turn) _historyTurnIdentity = (-1, -1, -1);
     private readonly Dictionary<(object Actor, string Category), int> _historyTotalCounts = new();
     private readonly Dictionary<(object Actor, string Category), int> _historyThisTurnCounts = new();
@@ -1256,7 +1221,7 @@ public partial class RunSimulator
 
     private const int MaxRelics = 40;
     private const int MaxPotions = 10;
-    private const int MaxHandCards = 50;
+    private const int MaxDeckCard = 50;
     private static void PlayerSummary(Player player, float[] buffer, ref int offset)
     {
         if (player == null) return;
@@ -1274,7 +1239,7 @@ public partial class RunSimulator
         for (int i = 0; i < MaxPotions; i++)
             Potion(player.PotionSlots != null && i < player.PotionSlots.Count ? player.PotionSlots[i] : null, buffer, ref offset);
 
-        for (int i = 0; i < MaxHandCards; i++)
+        for (int i = 0; i < MaxDeckCard; i++)
             Card(player.Deck?.Cards != null && i < player.Deck.Cards.Count ? player.Deck.Cards[i] : null, buffer, ref offset);
     }
     private void RunContext(float[] buffer, ref int offset)

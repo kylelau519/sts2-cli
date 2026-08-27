@@ -83,6 +83,13 @@ namespace Sts2Headless
             return _reverseTokenMap.TryGetValue(token, out var key) ? key : "UNKNOWN";
         }
 
+        /// <summary>Bulk-exports the full token -> "CATEGORY:ID" map as JSON, so a buffer-mode
+        /// Python caller can build its own local int -> id lookup once at startup instead of
+        /// paying a CLR round-trip through Decode() for every token on every step -- see
+        /// python/buffer_env.py.</summary>
+        public string ExportJson() =>
+            System.Text.Json.JsonSerializer.Serialize(_reverseTokenMap);
+
         private void AddCharacterTokens()
         {
             int idx = 0;
