@@ -49,6 +49,253 @@ def decode_token(token: int) -> str | None:
     return entry
 
 
+# --- full decode, for debugging only ------------------------------------------------------------
+# Rebuilds exactly the per-decision object graph buffer_layout.py's own docstring says the buffer
+# protocol exists to avoid paying for -- never call decode_buffer()/BufferDecision.to_dict() from
+# inside a training loop's step. It's here so a human (or a print/log statement) can look at a
+# captured BufferDecision the same way they'd read a JSON `Decision`, without hand-rolling offset
+# math at a debugger prompt. Every value returned is a plain Python int/float/str/bool/None/list/
+# dict/tuple (never a numpy scalar), so the result round-trips through json.dumps for logging.
+
+
+def _decode_card(slot: np.ndarray) -> dict | None:
+    """slot is a raw CARD_SIZE block, or the first CARD_SIZE floats of a longer row (a hand/pile/
+    shop/etc. slot) -- callers already sliced to slot[:bl.CARD_SIZE] before calling this. None for
+    an empty/padding slot (card_token == 0)."""
+    if bl.card_token(slot) == 0:
+        return None
+    enchant_tok = int(slot[bl.CARD_ENCHANT_TOKEN])
+    afflict_tok = int(slot[bl.CARD_AFFLICT_TOKEN])
+    mask = int(slot[bl.CARD_KEYWORD_MASK])
+    return {
+        "id": decode_token(bl.card_token(slot)),
+        "cost": float(slot[bl.CARD_COST]),
+        "type": int(slot[bl.CARD_TYPE]),
+        "rarity": int(slot[bl.CARD_RARITY]),
+        "upgraded": bool(slot[bl.CARD_UPGRADED]),
+        "upgradable": bool(slot[bl.CARD_UPGRADABLE]),
+        "enchantment": decode_token(enchant_tok),
+        "enchantment_amount": float(slot[bl.CARD_ENCHANT_AMOUNT]) if enchant_tok != -1 else None,
+        "affliction": decode_token(afflict_tok),
+        "affliction_amount": float(slot[bl.CARD_AFFLICT_AMOUNT]) if afflict_tok != -1 else None,
+        "keywords": [name for name, bit in bl.CARD_KEYWORD_BITS.items() if mask & (1 << bit)],
+    }
+
+
+def _decode_hand_slot(slot: np.ndarray) -> dict | None:
+    card = _decode_card(slot[:bl.CARD_SIZE])
+    if card is None:
+        return None
+    card["can_play"] = bl.hand_can_play(slot)
+    card["star_cost"] = bl.hand_star_cost(slot)
+    card["target_type"] = bl.hand_target_type(slot)
+    card["stats"] = {k: bl.hand_stat(slot, k) for k in bl.HAND_STAT_KEYS if bl.hand_stat(slot, k) != -1}
+    card["damage_by_target"] = {}
+    for i in range(bl.MAX_ENEMIES):
+        dmg, repeat = bl.damage_by_target(slot, i)
+        if dmg != -1:
+            card["damage_by_target"][i] = {"damage": dmg, "repeat": repeat}
+    return card
+
+
+def _decode_enemy_slot(slot: np.ndarray) -> dict:
+    intents = [
+        {"type": itype, "damage": dmg}
+        for i in range(bl.MAX_INTENTS_PER_ENEMY)
+        for itype, dmg in [bl.enemy_intent(slot, i)] if itype != -1
+    ]
+    powers = [
+        {"id": decode_token(int(pw[0])), "amount": float(pw[1])} for _, pw in bl.enemy_powers(slot)
+    ]
+    return {
+        "monster": decode_token(bl.enemy_token(slot)),
+        "hp": bl.enemy_hp(slot),
+        "max_hp": bl.enemy_max_hp(slot),
+        "block": bl.enemy_block(slot),
+        "intends_attack": bl.enemy_intends_attack(slot),
+        "intents": intents,
+        "powers": powers,
+    }
+
+
+def _decode_player_summary(arr: np.ndarray) -> dict:
+    return {
+        "hp": bl.player_hp(arr),
+        "max_hp": bl.player_max_hp(arr),
+        "block": bl.player_block(arr),
+        "gold": bl.player_gold(arr),
+        "max_potions": bl.player_max_potions(arr),
+        "deck_size": bl.player_deck_size(arr),
+        "relics": [decode_token(int(slot[bl.RELIC_TOKEN])) for _, slot in bl.player_relics(arr)],
+        "potions": [decode_token(int(slot[bl.POTION_TOKEN])) for _, slot in bl.player_potions(arr)],
+        "deck": [_decode_card(slot) for _, slot in bl.deck_cards(arr)],
+    }
+
+
+def _decode_run_context(arr: np.ndarray) -> dict:
+    raw = bl.run_context(arr)
+    return {
+        "act_index": raw["act_index"],
+        "act_id": decode_token(raw["act_id_token"]),
+        "floor": raw["floor"],
+        "boss1": decode_token(raw["boss1_token"]),
+        "boss2": decode_token(raw["boss2_token"]),
+    }
+
+
+def _decode_combat_play(arr: np.ndarray) -> dict:
+    stars = bl.regent_stars(arr)
+    osty = bl.osty(arr)
+    alive_enemy_indices = [i for i, _ in bl.enemies(arr)]
+    return {
+        "round": bl.round_number(arr),
+        "energy": bl.energy(arr),
+        "max_energy": bl.max_energy(arr),
+        "hand": [_decode_hand_slot(slot) for _, slot in bl.hand_cards(arr)],
+        "enemies": {i: _decode_enemy_slot(slot) for i, slot in bl.enemies(arr)},
+        "player_powers": [
+            {"id": decode_token(int(slot[0])), "amount": float(slot[1])}
+            for _, slot in bl.player_powers(arr)
+        ],
+        "draw_pile": {
+            "count": bl.draw_pile_count(arr),
+            "cards": [_decode_card(slot) for _, slot in bl.draw_pile_cards(arr)],
+        },
+        "discard_pile": {
+            "count": bl.discard_pile_count(arr),
+            "cards": [_decode_card(slot) for _, slot in bl.discard_pile_cards(arr)],
+        },
+        "exhaust_pile": {
+            "count": bl.exhaust_pile_count(arr),
+            "cards": [_decode_card(slot) for _, slot in bl.exhaust_pile_cards(arr)],
+        },
+        "orbs": [
+            {"id": decode_token(int(slot[0])), "passive": float(slot[1]), "evoke": float(slot[2])}
+            for _, slot in bl.orbs(arr)
+        ],
+        "orb_capacity": bl.orb_capacity(arr),
+        "regent_stars": stars if stars != -1 else None,
+        "osty": osty if osty["hp"] != -1 else None,
+        "player_history": bl.player_history(arr),
+        "card_generated_by_creator": bl.card_generated_by_creator(arr),
+        "enemy_history": {i: bl.enemy_history(arr, i) for i in alive_enemy_indices},
+    }
+
+
+def _decode_map(arr: np.ndarray) -> dict:
+    rows: dict[int, list[dict]] = {}
+    boss = None
+    for row, col, slot in bl.map_points(arr):
+        point = {
+            "type": bl.map_point_type(slot),
+            "visited": bool(slot[1]),
+            "current": bool(slot[2]),
+            "children": list(bl.map_point_children(slot)),
+        }
+        if row == -1:
+            boss = point
+        else:
+            point["col"] = col
+            rows.setdefault(row, []).append(point)
+    return {"rows": rows, "boss": boss}
+
+
+def _decode_card_select(arr: np.ndarray) -> dict:
+    return {
+        "min_select": bl.min_select(arr),
+        "max_select": bl.max_select(arr),
+        "options": [_decode_card(slot) for _, slot in bl.select_cards(arr)],
+    }
+
+
+def _decode_shop(arr: np.ndarray) -> dict:
+    cards = []
+    for _, slot in bl.shop_cards(arr):
+        card = _decode_card(slot[:bl.CARD_SIZE])
+        assert card is not None  # shop_cards() already filters to occupied slots
+        card["price"] = float(slot[bl.CARD_SIZE])
+        card["is_stocked"] = bool(slot[bl.CARD_SIZE + 1])
+        card["is_on_sale"] = bool(slot[bl.CARD_SIZE + 2])
+        cards.append(card)
+    return {
+        "cards": cards,
+        "relics": [
+            {"id": decode_token(int(slot[0])), "price": float(slot[1]), "is_stocked": bool(slot[2])}
+            for _, slot in bl.shop_relics(arr)
+        ],
+        "potions": [
+            {"id": decode_token(int(slot[0])), "price": float(slot[1]), "is_stocked": bool(slot[2])}
+            for _, slot in bl.shop_potions(arr)
+        ],
+        "removal_cost": bl.shop_removal_cost(arr),
+    }
+
+
+def _decode_rest_site(arr: np.ndarray) -> dict:
+    return {
+        "options": [
+            {"index": i, "is_enabled": bool(slot[1])} for i, slot in bl.rest_options(arr)
+        ]
+    }
+
+
+def _decode_card_reward(arr: np.ndarray) -> dict:
+    return {
+        "can_skip": bl.can_skip_reward(arr),
+        "gold_delta": bl.reward_gold_delta(arr),
+        "cards": [_decode_card(slot) for _, slot in bl.reward_cards(arr)],
+    }
+
+
+def _decode_event_choice(arr: np.ndarray) -> dict:
+    return {
+        "event": decode_token(bl.event_token(arr)),
+        "options": [{"index": i, "is_locked": locked} for i, locked in bl.event_options(arr)],
+    }
+
+
+def _decode_bundle_select(arr: np.ndarray) -> dict:
+    return {b: [_decode_card(slot) for _, slot in cards] for b, cards in bl.bundles(arr)}
+
+
+_SECTION_DECODERS = {
+    "combat_play": ("combat_play", _decode_combat_play),
+    "map_select": ("map", _decode_map),
+    "card_select": ("card_select", _decode_card_select),
+    "shop": ("shop", _decode_shop),
+    "rest_site": ("rest_site", _decode_rest_site),
+    "card_reward": ("card_reward", _decode_card_reward),
+    "event_choice": ("event_choice", _decode_event_choice),
+    "event_card_reward": ("event_card_reward", lambda arr: {
+        "cards": [_decode_card(slot) for _, slot in bl.event_card_reward_cards(arr)]
+    }),
+    "bundle_select": ("bundle_select", _decode_bundle_select),
+    "game_over": ("game_over", lambda arr: {"victory": bl.victory(arr)}),
+}
+
+
+def decode_buffer(arr: np.ndarray) -> dict:
+    """Full human-readable decode of one raw buffer record: every tokenized id resolved to its
+    game entry string (via decode_token), every section as plain dicts/lists -- close enough to
+    the JSON protocol's own shape to eyeball the two against each other. Debugging/logging only --
+    see this section's module-level comment for why. `player`/`run_context` are always present
+    (they're always-fresh sections); the key named after the current `decision` holds whichever
+    section is actually live right now (e.g. arr's DecisionType == combat_play -> a "combat_play"
+    key), matching BufferStateWriter's own refresh-only-what's-relevant semantics -- a stale
+    section from an earlier decision is never decoded even though the raw buffer still holds it."""
+    decision = bl.decision_name(arr)
+    out: dict = {
+        "decision": decision,
+        "player": _decode_player_summary(arr),
+        "run_context": _decode_run_context(arr),
+    }
+    entry = _SECTION_DECODERS.get(decision)
+    if entry is not None:
+        key, decoder = entry
+        out[key] = decoder(arr)
+    return out
+
+
 class BufferDecision:
     """arr: a numpy float32 array this instance owns exclusively (a fresh copy out of
     BufferSession's reused native buffer -- see Sts2BufferSession._decision(); never aliases the
@@ -73,6 +320,16 @@ class BufferDecision:
     def victory(self) -> bool:
         return bl.victory(self.arr) if self.decision == "game_over" else False
 
+    def to_dict(self) -> dict:
+        """Full human-readable decode -- see decode_buffer()'s docstring. For debugging/logging
+        (printing a step, dumping to a log file, diffing two decisions) -- never call this from a
+        training loop's hot path; that's exactly the per-step object-graph cost the buffer
+        protocol exists to avoid."""
+        return decode_buffer(self.arr)
+
+    def __repr__(self) -> str:
+        return f"BufferDecision({self.decision!r})"
+
 
 class Sts2BufferSession:
     def __init__(self, logger=None):
@@ -90,9 +347,6 @@ class Sts2BufferSession:
         self.ascension: int = 0
 
     def _decision(self, raw) -> BufferDecision:
-        """raw is the C# float[] BufferSession returns -- the SAME native array on every call
-        (see BufferSession.cs), so this always copies into a fresh numpy array rather than
-        wrapping it, unlike a zero-copy view would."""
         return BufferDecision(np.array(raw, dtype=np.float32))
 
     def start(self, character: str, seed: str, ascension: int = 0) -> BufferDecision:

@@ -64,9 +64,25 @@ _PLAYER_DECK_OFFSET = _PLAYER_POTIONS_OFFSET + MAX_POTIONS * POTION_SIZE
 PLAYER_SUMMARY_SIZE = _PLAYER_DECK_OFFSET + MAX_DECK_CARDS * CARD_SIZE
 assert PLAYER_SUMMARY_SIZE == 657
 
-MAP_SIZE = 1269
+MAX_MAP_ROWS = 20
+MAX_MAP_COLS = 7
+MAX_MAP_CHILDREN = 3
+MAP_POINT_SIZE = 3 + MAX_MAP_CHILDREN * 2  # type, visited, current, then (col,row) per child
+MAP_SIZE = MAX_MAP_ROWS * MAX_MAP_COLS * MAP_POINT_SIZE + MAP_POINT_SIZE  # + 1 trailing boss point
+assert MAP_SIZE == 1269
+
+MAP_POINT_TYPES = {
+    -1: None, 0: "Unassigned", 1: "Unknown", 2: "Shop", 3: "Treasure", 4: "RestSite",
+    5: "Monster", 6: "Elite", 7: "Boss", 8: "Ancient",
+}
+
 RUN_CONTEXT_SIZE = 5
-RUN_CONTEXT_ACT, RUN_CONTEXT_FLOOR, RUN_CONTEXT_ROOM_TYPE, RUN_CONTEXT_BOSS1, RUN_CONTEXT_BOSS2 = range(5)
+# Fixed 2026-08-27: this used to read RUN_CONTEXT_ACT, RUN_CONTEXT_FLOOR, RUN_CONTEXT_ROOM_TYPE,
+# RUN_CONTEXT_BOSS1, RUN_CONTEXT_BOSS2 = range(5) -- mislabeled against RunSimulator.cs's actual
+# RunContext() write order (act_index, act_id, floor, boss1, boss2; there is no "room_type" field
+# in this section at all). Never read via these names before the fix (grep confirmed), so this was
+# a landmine, not a live bug.
+RUN_CONTEXT_ACT_INDEX, RUN_CONTEXT_ACT_ID, RUN_CONTEXT_FLOOR, RUN_CONTEXT_BOSS1, RUN_CONTEXT_BOSS2 = range(5)
 
 # --- CombatPlay ------------------------------------------------------------------------------------
 
@@ -181,6 +197,7 @@ assert EVENT_CHOICE_SIZE == 6
 
 # --- EventCardReward -------------------------------------------------------------------------------
 
+_ECR_CARDS_OFFSET = 0
 EVENT_CARD_REWARD_SIZE = MAX_REWARD_CARDS * CARD_SIZE
 assert EVENT_CARD_REWARD_SIZE == 66
 
@@ -295,7 +312,83 @@ def player_potions(arr: np.ndarray):
             n += 1
 
 
+def player_deck_size(arr: np.ndarray) -> int:
+    return int(arr[PLAYER_SUMMARY + PLAYER_DECK_SIZE])
+
+
+def deck_slot(arr: np.ndarray, i: int) -> np.ndarray:
+    base = PLAYER_SUMMARY + _PLAYER_DECK_OFFSET + i * CARD_SIZE
+    return arr[base:base + CARD_SIZE]
+
+
+def deck_cards(arr: np.ndarray):
+    """Yields (index, slot) for every real (non-padding) deck card -- the full deck, not the hand
+    (see hand_cards() below for that)."""
+    for i in range(MAX_DECK_CARDS):
+        slot = deck_slot(arr, i)
+        if card_token(slot) != 0:
+            yield i, slot
+
+
+# --- Map -------------------------------------------------------------------------------------------
+
+def map_point_slot(arr: np.ndarray, row: int, col: int) -> np.ndarray:
+    base = MAP + (row * MAX_MAP_COLS + col) * MAP_POINT_SIZE
+    return arr[base:base + MAP_POINT_SIZE]
+
+
+def map_boss_point(arr: np.ndarray) -> np.ndarray:
+    base = MAP + MAX_MAP_ROWS * MAX_MAP_COLS * MAP_POINT_SIZE
+    return arr[base:base + MAP_POINT_SIZE]
+
+
+def map_point_type(slot: np.ndarray) -> str | None:
+    return MAP_POINT_TYPES.get(int(slot[0]))
+
+
+def map_point_children(slot: np.ndarray):
+    """Yields (col, row) for each present child (a grid cell's PointType is -1 for an empty cell,
+    but a *real* point with fewer than MAX_MAP_CHILDREN children still pads the rest -1,-1)."""
+    for i in range(MAX_MAP_CHILDREN):
+        col, row = int(slot[3 + i * 2]), int(slot[3 + i * 2 + 1])
+        if col != -1:
+            yield col, row
+
+
+def map_points(arr: np.ndarray):
+    """Yields (row, col, slot) for every non-empty grid cell (PointType != -1) plus a final
+    (-1, -1, slot) entry for the trailing boss point -- mirrors GetFullMap()'s JSON `boss` field
+    being separate from its `rows` grid."""
+    for row in range(MAX_MAP_ROWS):
+        for col in range(MAX_MAP_COLS):
+            slot = map_point_slot(arr, row, col)
+            if int(slot[0]) != -1:
+                yield row, col, slot
+    boss = map_boss_point(arr)
+    if int(boss[0]) != -1:
+        yield -1, -1, boss
+
+
+# --- RunContext ------------------------------------------------------------------------------------
+
+def run_context(arr: np.ndarray) -> dict:
+    """Raw ints (act index, tokenized act/boss ids, floor) -- same convention as everywhere else in
+    this module: token -> name resolution needs the ExportTokenMap loaded on the buffer_env.py side,
+    not here."""
+    return {
+        "act_index": int(arr[RUN_CONTEXT + RUN_CONTEXT_ACT_INDEX]),
+        "act_id_token": int(arr[RUN_CONTEXT + RUN_CONTEXT_ACT_ID]),
+        "floor": int(arr[RUN_CONTEXT + RUN_CONTEXT_FLOOR]),
+        "boss1_token": int(arr[RUN_CONTEXT + RUN_CONTEXT_BOSS1]),
+        "boss2_token": int(arr[RUN_CONTEXT + RUN_CONTEXT_BOSS2]),
+    }
+
+
 # --- CombatPlay ------------------------------------------------------------------------------------
+
+def round_number(arr: np.ndarray) -> int:
+    return int(arr[COMBAT_PLAY + _CP_ROUND])
+
 
 def energy(arr: np.ndarray) -> int:
     return int(arr[COMBAT_PLAY + _CP_ENERGY])
@@ -359,6 +452,10 @@ def enemies(arr: np.ndarray):
         slot = enemy_slot(arr, i)
         if int(slot[_ENEMY_TOKEN]) != -1:
             yield i, slot
+
+
+def enemy_token(slot: np.ndarray) -> int:
+    return int(slot[_ENEMY_TOKEN])
 
 
 def enemy_hp(slot: np.ndarray) -> int:
@@ -430,6 +527,88 @@ def orb_capacity(arr: np.ndarray) -> int:
     return int(arr[COMBAT_PLAY + _CP_ORB_CAPACITY_OFFSET])
 
 
+def draw_pile_count(arr: np.ndarray) -> int:
+    return int(arr[COMBAT_PLAY + _CP_PILE_COUNTS_OFFSET])
+
+
+def discard_pile_count(arr: np.ndarray) -> int:
+    return int(arr[COMBAT_PLAY + _CP_PILE_COUNTS_OFFSET + 1])
+
+
+def exhaust_pile_count(arr: np.ndarray) -> int:
+    return int(arr[COMBAT_PLAY + _CP_PILE_COUNTS_OFFSET + 2])
+
+
+def _pile_slot(arr: np.ndarray, pile_offset: int, i: int) -> np.ndarray:
+    base = COMBAT_PLAY + pile_offset + i * CARD_SIZE
+    return arr[base:base + CARD_SIZE]
+
+
+def _pile_cards(arr: np.ndarray, pile_offset: int):
+    for i in range(MAX_DECK_CARDS):
+        slot = _pile_slot(arr, pile_offset, i)
+        if card_token(slot) != 0:
+            yield i, slot
+
+
+def draw_pile_cards(arr: np.ndarray):
+    """Note: WritePile always pads to MAX_DECK_CARDS regardless of the actual pile size -- use
+    draw_pile_count(arr) for the true count, this just yields whichever cards are actually
+    present (there's no ordering guarantee beyond whatever the engine's pile order was)."""
+    return _pile_cards(arr, _CP_DRAW_PILE_OFFSET)
+
+
+def discard_pile_cards(arr: np.ndarray):
+    return _pile_cards(arr, _CP_DISCARD_PILE_OFFSET)
+
+
+def exhaust_pile_cards(arr: np.ndarray):
+    return _pile_cards(arr, _CP_EXHAUST_PILE_OFFSET)
+
+
+def regent_stars(arr: np.ndarray) -> int:
+    """-1 if the player isn't Regent."""
+    return int(arr[COMBAT_PLAY + _CP_STARS_OFFSET])
+
+
+def osty(arr: np.ndarray) -> dict:
+    """hp/max_hp/block are -1 if there's no Osty and the player isn't Necrobinder. `alive` is 1/0
+    if there's a live/dead Osty, 0 if Necrobinder with no current Osty, or -1 if not Necrobinder --
+    see WriteCombatPlay's osty lines for the exact tri-state logic."""
+    base = COMBAT_PLAY + _CP_OSTY_OFFSET
+    return {
+        "hp": int(arr[base]), "max_hp": int(arr[base + 1]),
+        "block": int(arr[base + 2]), "alive": int(arr[base + 3]),
+    }
+
+
+def _history_dict(arr: np.ndarray, base: int) -> dict:
+    return {
+        name: (int(arr[base + i * 2]), int(arr[base + i * 2 + 1]))
+        for i, name in enumerate(HISTORY_COUNTER_NAMES)
+    }
+
+
+def player_history(arr: np.ndarray) -> dict:
+    """{counter_name: (this_turn, this_combat)} for the player -- see HISTORY_COUNTER_NAMES."""
+    return _history_dict(arr, COMBAT_PLAY + _CP_PLAYER_HISTORY_OFFSET)
+
+
+def card_generated_by_creator(arr: np.ndarray) -> tuple[int, int]:
+    """(this_turn, this_combat) count of cards generated BY this player as the creator (e.g. via
+    a relic/power effect) -- keyed differently from player_history's own card_generated (which is
+    keyed by Actor, not Creator). See WriteHistoryCount's doc comment in RunSimulator.cs."""
+    base = COMBAT_PLAY + _CP_CARD_GENERATED_BY_CREATOR_OFFSET
+    return int(arr[base]), int(arr[base + 1])
+
+
+def enemy_history(arr: np.ndarray, i: int) -> dict:
+    """{counter_name: (this_turn, this_combat)} for the enemy at slot `i` (same index as
+    enemies()/enemy_slot()) -- an absent/dead enemy slot reads -1,-1 for every counter."""
+    base = COMBAT_PLAY + _CP_ENEMY_HISTORY_OFFSET + i * HISTORY_CREATURE_SIZE
+    return _history_dict(arr, base)
+
+
 # --- CardSelect ------------------------------------------------------------------------------------
 
 def min_select(arr: np.ndarray) -> int:
@@ -454,10 +633,78 @@ def select_cards(arr: np.ndarray):
             yield i, slot
 
 
+# --- Shop ------------------------------------------------------------------------------------------
+
+def shop_card_slot(arr: np.ndarray, i: int) -> np.ndarray:
+    base = SHOP + _SHOP_CARDS_OFFSET + i * _SHOP_CARD_SLOT_SIZE
+    return arr[base:base + _SHOP_CARD_SLOT_SIZE]
+
+
+def shop_cards(arr: np.ndarray):
+    """Yields (index, slot) for every stocked-or-not shop card entry -- slot[:CARD_SIZE] is the
+    Card(11) block, slot[CARD_SIZE] is cost, slot[CARD_SIZE+1] is_stocked, slot[CARD_SIZE+2]
+    is_on_sale. Character + colorless entries are concatenated, same order as the JSON path."""
+    for i in range(MAX_SHOP_CARDS):
+        slot = shop_card_slot(arr, i)
+        if card_token(slot) != 0:
+            yield i, slot
+
+
+def shop_relic_slot(arr: np.ndarray, i: int) -> np.ndarray:
+    base = SHOP + _SHOP_RELICS_OFFSET + i * _SHOP_RELIC_SLOT_SIZE
+    return arr[base:base + _SHOP_RELIC_SLOT_SIZE]
+
+
+def shop_relics(arr: np.ndarray):
+    """(token, cost, is_stocked) per slot; empty slots are token -1."""
+    for i in range(MAX_SHOP_RELICS):
+        slot = shop_relic_slot(arr, i)
+        if int(slot[0]) != -1:
+            yield i, slot
+
+
+def shop_potion_slot(arr: np.ndarray, i: int) -> np.ndarray:
+    base = SHOP + _SHOP_POTIONS_OFFSET + i * _SHOP_POTION_SLOT_SIZE
+    return arr[base:base + _SHOP_POTION_SLOT_SIZE]
+
+
+def shop_potions(arr: np.ndarray):
+    """(token, cost, is_stocked) per slot; empty slots are token -1."""
+    for i in range(MAX_SHOP_POTIONS):
+        slot = shop_potion_slot(arr, i)
+        if int(slot[0]) != -1:
+            yield i, slot
+
+
+def shop_removal_cost(arr: np.ndarray) -> int:
+    """-1 if card removal isn't available."""
+    return int(arr[SHOP + _SHOP_REMOVAL_COST_OFFSET])
+
+
+# --- RestSite --------------------------------------------------------------------------------------
+
+def rest_option_slot(arr: np.ndarray, i: int) -> np.ndarray:
+    base = REST_SITE + i * 2
+    return arr[base:base + 2]
+
+
+def rest_options(arr: np.ndarray):
+    """(present, is_enabled) per slot -- present/is_enabled are 1/0, or -1 if no such option."""
+    for i in range(MAX_REST_OPTIONS):
+        slot = rest_option_slot(arr, i)
+        if int(slot[0]) != -1:
+            yield i, slot
+
+
 # --- CardReward ------------------------------------------------------------------------------------
 
 def can_skip_reward(arr: np.ndarray) -> bool:
     return bool(arr[CARD_REWARD + _CR_CAN_SKIP])
+
+
+def reward_gold_delta(arr: np.ndarray) -> int:
+    """Gold gained this combat (player.Gold - _goldBeforeCombat)."""
+    return int(arr[CARD_REWARD + _CR_GOLD_DELTA])
 
 
 def reward_card_slot(arr: np.ndarray, i: int) -> np.ndarray:
@@ -470,6 +717,61 @@ def reward_cards(arr: np.ndarray):
         slot = reward_card_slot(arr, i)
         if card_token(slot) != 0:
             yield i, slot
+
+
+# --- EventChoice -----------------------------------------------------------------------------------
+
+def event_token(arr: np.ndarray) -> int:
+    """-1 if no event is active."""
+    return int(arr[EVENT_CHOICE + _EC_EVENT_TOKEN])
+
+
+def event_option_locked(arr: np.ndarray, i: int) -> int:
+    """1/0 if the option exists (locked/unlocked), or -1 if no such option."""
+    return int(arr[EVENT_CHOICE + _EC_OPTIONS_OFFSET + i])
+
+
+def event_options(arr: np.ndarray):
+    """Yields (index, is_locked) for every present event option."""
+    for i in range(MAX_EVENT_OPTIONS):
+        v = event_option_locked(arr, i)
+        if v != -1:
+            yield i, bool(v)
+
+
+# --- EventCardReward -------------------------------------------------------------------------------
+
+def event_card_reward_slot(arr: np.ndarray, i: int) -> np.ndarray:
+    base = EVENT_CARD_REWARD + _ECR_CARDS_OFFSET + i * CARD_SIZE
+    return arr[base:base + CARD_SIZE]
+
+
+def event_card_reward_cards(arr: np.ndarray):
+    for i in range(MAX_REWARD_CARDS):
+        slot = event_card_reward_slot(arr, i)
+        if card_token(slot) != 0:
+            yield i, slot
+
+
+# --- BundleSelect ------------------------------------------------------------------------------------
+
+def bundle_card_slot(arr: np.ndarray, bundle_index: int, i: int) -> np.ndarray:
+    base = BUNDLE_SELECT + (bundle_index * MAX_BUNDLE_CARDS + i) * CARD_SIZE
+    return arr[base:base + CARD_SIZE]
+
+
+def bundles(arr: np.ndarray):
+    """Yields (bundle_index, [(card_index, slot), ...]) for every non-empty bundle (Scroll Box
+    'pick 1 of N packs') -- an empty bundle slot (no pending selection, or fewer than
+    MAX_BUNDLES offered) is skipped entirely rather than yielded with an empty card list."""
+    for b in range(MAX_BUNDLES):
+        cards = [
+            (i, bundle_card_slot(arr, b, i))
+            for i in range(MAX_BUNDLE_CARDS)
+            if card_token(bundle_card_slot(arr, b, i)) != 0
+        ]
+        if cards:
+            yield b, cards
 
 
 # --- GameOver --------------------------------------------------------------------------------------
