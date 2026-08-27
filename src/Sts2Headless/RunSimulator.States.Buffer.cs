@@ -89,7 +89,9 @@ public partial class RunSimulator
         private const int RunContextSize = 5;
 
         public const int CombatPlay = RunContext + RunContextSize;
-        private const int CombatPlaySize = 3617;
+        private const int CombatPlaySize = 3717; // +100 vs. the original 3617: one target_type
+        // float and one "cards" HandCardStatKeys entry, each added per hand slot (50 slots), after
+        // this constant was first set -- see the hand-card loop below and HandCardStatKeys above.
 
         public const int CardSelect = CombatPlay + CombatPlaySize;
         private const int CardSelectSize = 552; // minSelect + maxSelect + 50*Card(11)
@@ -147,6 +149,8 @@ public partial class RunSimulator
         {
             "damage", "block", "magicnumber", "secondarydamage", "secondarymagicnumber",
             "calculateddamage", "repeat", "heal",
+            "cards", // draw count (e.g. Pommel Strike) -- Vakuu's mcts.py needs this to detect a
+                     // card-drawing play as a chance node (see its draws_cards()).
         };
 
         private readonly RunSimulator _sim;
@@ -252,6 +256,12 @@ public partial class RunSimulator
                 Card(c, _buffer, ref offset);
                 _buffer[offset++] = c != null && c.CanPlay(out _, out _) ? 1 : 0;
                 _buffer[offset++] = c?.CurrentStarCost ?? 0;
+                // Raw TargetType enum ordinal (None=0, Self=1, AnyEnemy=2, AllEnemies=3, ...) --
+                // a policy needs this to know whether play_card requires target_index (only
+                // AnyEnemy with >=2 alive enemies does; see actions.py's PlayCardArgs), which
+                // damage_by_target below can't disambiguate on its own (AllEnemies cards also
+                // populate a damage row per enemy). -1 for an empty slot.
+                _buffer[offset++] = c?.TargetType != null ? (int)c.TargetType : -1;
 
                 // Empty-slot fast path avoids allocating a throwaway Dictionary for the ~43 unused
                 // hand slots every call -- an empty dict's TryGetValue always misses anyway, so the
