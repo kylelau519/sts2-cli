@@ -1,54 +1,10 @@
-import sys
-import os
 import time
-import contextlib
 
-from clr_loader import get_coreclr
-from pythonnet import set_runtime
+from clr_bridge import load_clr, silence_stderr
 
-
-@contextlib.contextmanager
-def silence_stderr():
-    """Redirect OS-level fd 2 to devnull.
-
-    GymEnv runs the CLR in-process (no subprocess to pipe stderr from, unlike
-    env.py's Sts2Session), and its Console.Error.WriteLine [SIM] logging is
-    unconditional. Terminal writes on every end_turn dominate the benchmark,
-    so redirect the raw fd rather than touching Console.Error from .NET.
-
-    Must be active before the CLR is loaded: .NET's Console.Error dups fd 2
-    once on first access and keeps writing to that duplicate afterward, so
-    redirecting fd 2 after setup_env()/Reset() has already run is a no-op.
-    """
-    stderr_fd = sys.stderr.fileno()
-    saved_fd = os.dup(stderr_fd)
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
-    try:
-        os.dup2(devnull_fd, stderr_fd)
-        yield
-    finally:
-        os.dup2(saved_fd, stderr_fd)
-        os.close(devnull_fd)
-        os.close(saved_fd)
 
 def setup_env():
-    # Use a specific runtimeconfig to ensure pythonnet loads the .NET 9 CoreCLR environment properly
-    # This prevents loading .NET 10 which breaks HarmonyLib.
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    runtime_config = os.path.join(base_dir, "src", "Sts2Headless", "bin", "Debug", "net9.0", "Sts2Headless.runtimeconfig.json")
-    rt = get_coreclr(runtime_config=runtime_config)
-    set_runtime(rt)
-
-    import clr
-
-    dll_path = os.path.join(base_dir, "src", "Sts2Headless", "bin", "Debug", "net9.0", "Sts2Headless.dll")
-    sys.path.append(os.path.dirname(dll_path))
-
-    clr.AddReference("Sts2Headless")
-    import Sts2Headless
-
-    env = Sts2Headless.GymEnv()
-    return env
+    return load_clr().GymEnv()
 
 if __name__ == "__main__":
     print("Setting up Max-Speed Gym Env...")

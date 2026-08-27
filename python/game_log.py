@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(ROOT, "logs")
 
 # Default: keep logs for 7 days
-LOG_RETENTION_DAYS = 7
+LOG_RETENTION_DAYS = 3
 
 
 def cleanup_old_logs(max_age_days=LOG_RETENTION_DAYS):
