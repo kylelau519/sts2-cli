@@ -470,7 +470,8 @@ public partial class RunSimulator
                 _buffer[offset++] = e != null ? (e.IsStocked ? 1 : 0) : -1;
             }
 
-            _buffer[offset++] = inv?.CardRemovalEntry?.Cost ?? -1;
+            var removalEntry = inv?.CardRemovalEntry;
+            _buffer[offset++] = removalEntry != null && !_sim._usedCardRemovals.Contains(removalEntry) ? removalEntry.Cost : -1;
 
             RefreshPlayerSummary(player);
         }

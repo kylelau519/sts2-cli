@@ -708,7 +708,7 @@ public partial class RunSimulator
                 ["cards"] = cards,
                 ["relics"] = relics,
                 ["potions"] = potions,
-                ["card_removal_cost"] = removal?.Cost,
+                ["card_removal_cost"] = removal != null && !_sim._usedCardRemovals.Contains(removal) ? removal.Cost : null,
                 ["player"] = _sim.PlayerSummaryJson(player),
             };
         }

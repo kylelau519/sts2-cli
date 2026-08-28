@@ -160,6 +160,14 @@ public partial class RunSimulator
     private int _goldBeforeCombat;
     private int _lastKnownHp;
     private readonly HeadlessCardSelector _cardSelector = new();
+    // MerchantCardRemovalEntry.Used (which gates its own IsStocked) is only ever set by
+    // NMerchantCardRemoval, the shop screen's Godot UI node -- unreachable in headless mode,
+    // which drives the entity's OnTryPurchaseWrapper directly with no UI node in the scene
+    // tree. Tracked here instead, keyed by entry reference identity (a fresh
+    // MerchantCardRemovalEntry per shop visit, per MerchantInventory's own construction) so a
+    // single shop can't sell unlimited card removals -- see DoRemoveCard and the JSON/buffer
+    // writers' card_removal_cost export.
+    private readonly HashSet<MerchantCardRemovalEntry> _usedCardRemovals = new();
     // Pending bundle selection (Scroll Boxes: pick 1 of N packs)
     private IReadOnlyList<IReadOnlyList<CardModel>>? _pendingBundles;
     private TaskCompletionSource<IEnumerable<CardModel>>? _pendingBundleTcs;

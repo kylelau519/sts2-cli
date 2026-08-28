@@ -539,7 +539,14 @@ public partial class RunSimulator
 
         var removal = merchantRoom.GetLocalInventory().CardRemovalEntry;
         if (removal == null) return Error("No card removal available");
+        if (_usedCardRemovals.Contains(removal)) return Error("Card removal already used this shop visit");
         if (player.Gold < removal.Cost) return Error("Not enough gold");
+
+        // See _usedCardRemovals' docstring -- entity-side Used/IsStocked never flips in headless
+        // mode, so this is the actual gate. Recorded at commit (gold check passed), not at the
+        // real game's post-selection completion signal, since Vakuu's policy (the only headless
+        // caller so far) never cancels a pending removal select once started.
+        _usedCardRemovals.Add(removal);
 
         // Run on background thread so card selection can pause (same pattern as event options)
         var task = Task.Run(() => removal.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()));
