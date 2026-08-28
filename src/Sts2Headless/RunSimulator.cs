@@ -152,6 +152,15 @@ public partial class RunSimulator
     private static readonly LocLookup _loc = new();
     private bool _eventOptionChosen;
     private int _lastEventOptionCount;
+    // Most recently started Task.Run() background op (event option Chosen(), shop purchase,
+    // rest-site option) whose async chain can outlive the Action() call that started it -- e.g.
+    // an event option that awaits a card selection yields back to the caller as soon as the
+    // selection becomes pending, expecting a LATER, separate select_cards Action() call to
+    // resolve it and let the op run to completion. That later call has no local reference to the
+    // original Task, so without tracking it here, WaitForActionExecutor() has no way to know the
+    // op (e.g. SapphireSeed's Plant() finishing and calling SetEventFinished()) hasn't actually
+    // completed yet by the time it returns -- see TrackBackground()'s docstring.
+    private Task? _pendingBackgroundOp;
 
     // Pending rewards for card selection (populated after combat, before proceeding)
     private List<Reward>? _pendingRewards;
@@ -631,6 +640,29 @@ public partial class RunSimulator
             // Pump the synchronization context to execute any pending continuations
             _syncCtx.Pump();
 
+            // A background op tracked via TrackBackground() (event option Chosen(), shop
+            // purchase, rest-site option) may have yielded control back to an earlier Action()
+            // call at a pending selection that has SINCE been resolved by a later action -- e.g.
+            // select_cards resolving the TCS an event's Plant()/Eat() is awaiting. Its remaining
+            // continuation (applying the effect, then SetEventFinished()/finishing the purchase)
+            // can still be in flight right now on a ThreadPool thread. Without waiting for it
+            // here, the HasPending check below can read stale state (a just-resolved selection
+            // looking like nothing happened, or an event that hasn't actually closed out yet),
+            // letting the caller observe/act on state that's about to change out from under it --
+            // see this method's other stragglers comment below for the general class of bug.
+            if (_pendingBackgroundOp is { IsCompleted: false } trackedOp)
+            {
+                var swBg = Stopwatch.StartNew();
+                while (!trackedOp.IsCompleted && swBg.ElapsedMilliseconds < 2000)
+                {
+                    _syncCtx.Pump();
+                    SpinOrSleep(swBg.ElapsedMilliseconds);
+                }
+                _syncCtx.Pump();
+            }
+            if (_pendingBackgroundOp?.IsCompleted == true)
+                _pendingBackgroundOp = null;
+
             // Executor may stay "running" while the game awaits headless card selection / reward (e.g. Attack Potion).
             // Spinning here would time out and downstream code could mis-handle an in-flight potion use (BUG-026).
             if (_cardSelector.HasPending || _cardSelector.HasPendingReward)
@@ -683,6 +715,24 @@ public partial class RunSimulator
         {
             Log($"WaitForActionExecutor exception: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Registers a Task.Run() background op (must return Task/Task&lt;T&gt; so Task.Run's Func&lt;Task&gt;
+    /// overload unwraps it -- IsCompleted then reflects the op's whole async chain, not just its
+    /// synchronous prefix) so a LATER Action() call can still wait for it to genuinely finish,
+    /// even after the call that started it has already returned. Needed specifically for ops that
+    /// await a card selection: they yield back to their caller as soon as the selection becomes
+    /// pending (so the caller can report it), and only resume once a subsequent, separate
+    /// select_cards/skip_select call resolves it -- at which point the *original* caller's local
+    /// Task reference is long gone. WaitForActionExecutor() checks this field so any action can
+    /// wait for whatever background op is actually outstanding, not just the one it happened to
+    /// start itself.
+    /// </summary>
+    private Task TrackBackground(Task task)
+    {
+        _pendingBackgroundOp = task;
+        return task;
     }
 
     /// <summary>

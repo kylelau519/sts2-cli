@@ -477,7 +477,7 @@ public partial class RunSimulator
         // pending selection appears so the caller can resolve it; the background task
         // continues once the selector's TCS is fed by select_cards.
         var inv = merchantRoom.GetLocalInventory();
-        var task = Task.Run(() => entry.OnTryPurchaseWrapper(inv));
+        var task = TrackBackground(Task.Run(() => entry.OnTryPurchaseWrapper(inv)));
         for (int i = 0; i < 100; i++)
         {
             _syncCtx.Pump();
@@ -549,7 +549,7 @@ public partial class RunSimulator
         _usedCardRemovals.Add(removal);
 
         // Run on background thread so card selection can pause (same pattern as event options)
-        var task = Task.Run(() => removal.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()));
+        var task = TrackBackground(Task.Run(() => removal.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory())));
         for (int i = 0; i < 100; i++)
         {
             _syncCtx.Pump();
@@ -635,6 +635,21 @@ public partial class RunSimulator
             _syncCtx.Pump();
             WaitForActionExecutor();
             Log("Card selection in shop (card removal), refreshing shop state");
+        }
+
+        // Extra wait for event card selections (e.g. SapphireSeed's Plant()/Eat(), which each
+        // await a CardSelectCmd then apply the enchant/upgrade and either open a follow-up
+        // pending selection or call SetEventFinished()): that continuation can still be in
+        // flight on a background thread when this method returns -- same class of race as the
+        // RestSiteRoom/MerchantRoom cases above, just not a previously patched site. Without
+        // this, a later action sent before the continuation lands can observe stale event state
+        // (reproduced: SapphireSeed's Eat() follow-up card_select randomly missing under
+        // concurrent worker load, surfacing as "No pending card selection").
+        if (_runState?.CurrentRoom is EventRoom)
+        {
+            Thread.Sleep(200);
+            _syncCtx.Pump();
+            WaitForActionExecutor();
         }
 
         return DetectDecisionPoint();
@@ -764,7 +779,7 @@ public partial class RunSimulator
             try
             {
                 // Run on background thread so Smith card selection can pause
-                var task = Task.Run(() => RunManager.Instance.RestSiteSynchronizer.ChooseLocalOption(optionIndex));
+                var task = TrackBackground(Task.Run(() => RunManager.Instance.RestSiteSynchronizer.ChooseLocalOption(optionIndex)));
                 for (int i = 0; i < 100; i++)
                 {
                     _syncCtx.Pump();
@@ -822,7 +837,7 @@ public partial class RunSimulator
                         _eventOptionChosen = true;
                         _lastEventOptionCount = options.Count;
                         // Run on thread pool so GetSelectedCards/GetSelectedCardReward can block
-                        var task = Task.Run(() => options[optionIndex].Chosen());
+                        var task = TrackBackground(Task.Run(() => options[optionIndex].Chosen()));
                         for (int i = 0; i < 100; i++)
                         {
                             _syncCtx.Pump();
