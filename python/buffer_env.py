@@ -22,6 +22,7 @@ import numpy as np
 import buffer_layout as bl
 from actions import action
 from clr_bridge import load_clr
+from env import Sts2ActionError
 
 _token_map: dict[int, str] | None = None  # int -> "CATEGORY:ID", loaded once per process
 
@@ -357,14 +358,21 @@ class Sts2BufferSession:
     def open_from_checkpoint(self, character: str, seed: str, ascension: int,
                               actions: list[dict]) -> BufferDecision:
         """Same replay-to-reconstruct-state approach as Sts2Session.open_from_checkpoint -- see
-        its docstring. Intermediate replayed decisions are never wrapped in a BufferDecision (no
-        numpy copy, no accessor use): the caller only ever inspects the *final* decision reached,
-        same as the JSON path's own `decision` local being overwritten every loop iteration."""
+        its docstring. Intermediate replayed decisions are only ever wrapped far enough to check
+        for DecisionType.Error (a single cheap fixed-size numpy copy, not the accessor use a real
+        caller would do) -- the caller otherwise only inspects the *final* decision reached, same
+        as the JSON path's own `decision` local being overwritten every loop iteration."""
         self.character, self.seed, self.ascension = character, seed, ascension
         raw = self._session.StartRun(character, seed, ascension)
         for entry in actions:
             args = entry.get("args")
             raw = self._session.Action(entry["action"], json.dumps(args) if args else None)
+            if self._decision(raw).decision == "error":
+                # See step()'s docstring -- a checkpoint's own prefix can itself contain an
+                # action that only ever silently no-op'd (recorded as if it succeeded) rather
+                # than genuinely happening; surface that here instead of quietly replaying a
+                # divergent state for the rest of this branch.
+                raise Sts2ActionError(self._session.LastError or "unknown error")
         self.action_log = list(actions)
         return self._decision(raw)
 
@@ -376,6 +384,13 @@ class Sts2BufferSession:
         args = cmd.get("args")
         raw = self._session.Action(action_name, json.dumps(args) if args else None)
         decision = self._decision(raw)
+        if decision.decision == "error":
+            # A failed action leaves BufferSession's native buffer completely untouched (no
+            # DetectDecisionPoint() call happens on that path) -- see ExecuteActionToBuffer's
+            # docstring. Raising here, same as Sts2Session._to_decision does for the JSON
+            # protocol, is what makes that failure visible at all instead of silently no-op'ing
+            # while action_log still records the action as if it had succeeded.
+            raise Sts2ActionError(self._session.LastError or "unknown error")
         if self.logger:
             self.logger.log_state(decision)
         return decision

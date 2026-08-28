@@ -168,6 +168,11 @@ public partial class RunSimulator
     // single shop can't sell unlimited card removals -- see DoRemoveCard and the JSON/buffer
     // writers' card_removal_cost export.
     private readonly HashSet<MerchantCardRemovalEntry> _usedCardRemovals = new();
+    // Set by ExecuteActionToBuffer on a failed action (DecisionType.Error) -- the buffer itself
+    // has no string capacity to carry ExecuteAction's error message, so BufferSession.LastError
+    // reads this after a call to give buffer-protocol callers the same message the JSON
+    // protocol already returns inline.
+    public string? LastActionError { get; private set; }
     // Pending bundle selection (Scroll Boxes: pick 1 of N packs)
     private IReadOnlyList<IReadOnlyList<CardModel>>? _pendingBundles;
     private TaskCompletionSource<IEnumerable<CardModel>>? _pendingBundleTcs;

@@ -39,13 +39,35 @@ public partial class RunSimulator
     /// <summary>Buffer counterpart to ExecuteAction -- runs the exact same action logic (DoEndTurn,
     /// DoPlayCard, ...; nothing here is reimplemented) but redirects the DetectDecisionPoint() call
     /// those methods make internally to a buffer writer, so a training loop calling this in a tight
-    /// step loop isn't also paying to build and immediately discard a JSON dict every step.</summary>
+    /// step loop isn't also paying to build and immediately discard a JSON dict every step.
+    ///
+    /// ExecuteAction's own return value -- {"type":"error",...} on a failed action (bad card
+    /// index, not enough energy/gold, an already-used one-shot like card removal, ...) -- is
+    /// itself just a Dictionary; the JSON protocol (Program.cs) sends it straight to the caller,
+    /// but nothing here used to look at it. An action guard clause returns straight to its
+    /// caller without ever calling DetectDecisionPoint(), so a failed action left the buffer
+    /// completely untouched -- same bytes as whatever the last successful call wrote -- with no
+    /// way for a buffer-protocol caller to tell a no-op failure from a real unchanged state.
+    /// Checked here and written into DecisionType.Error via WriteError (already implemented by
+    /// both writers, previously only ever reached from DetectDecisionPoint's own "no run"/"no
+    /// map" cases) so Sts2BufferSession.step() can raise on it the same way Sts2Session already
+    /// does for the JSON path.</summary>
     public float[] ExecuteActionToBuffer(string action, Dictionary<string, object?>? args, float[]? buffer = null)
     {
         buffer ??= new float[BufferLayout.TotalSize];
         var previous = _bufferRedirect;
-        _bufferRedirect = new BufferStateWriter(this, buffer);
-        try { ExecuteAction(action, args); }
+        var writer = new BufferStateWriter(this, buffer);
+        _bufferRedirect = writer;
+        LastActionError = null;
+        try
+        {
+            var result = ExecuteAction(action, args);
+            if (result.TryGetValue("type", out var type) && (type as string) == "error")
+            {
+                LastActionError = result.TryGetValue("message", out var m) ? m as string ?? "unknown error" : "unknown error";
+                writer.WriteError(LastActionError);
+            }
+        }
         finally { _bufferRedirect = previous; }
         return buffer;
     }

@@ -100,5 +100,9 @@ namespace Sts2Headless
         }
 
         public void RandomizeDrawPile(int seed) => _sim.RandomizeDrawPile(seed);
+
+        /// <summary>Set by the most recent Action() call iff it returned DecisionType.Error --
+        /// see RunSimulator.LastActionError. None (not stale) after a call that succeeded.</summary>
+        public string? LastError => _sim.LastActionError;
     }
 }
