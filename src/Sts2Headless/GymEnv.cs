@@ -92,9 +92,9 @@ namespace Sts2Headless
             return _sim.DetectDecisionPointToBuffer(_obsBuffer);
         }
 
-        public float[] HealAndEnterCombat(string encounterId = "SHRINKER_BEETLE_WEAK")
+        public float[] HealAndEnterCombat(string encounterId = "SHRINKER_BEETLE_WEAK", int? targetHp = null)
         {
-            _sim.HealAndEnterCombat(encounterId);
+            _sim.HealAndEnterCombat(encounterId, targetHp);
             return _sim.DetectDecisionPointToBuffer(_obsBuffer);
         }
 

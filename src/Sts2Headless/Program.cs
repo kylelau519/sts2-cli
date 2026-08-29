@@ -134,12 +134,15 @@ class Program
                 );
 
             // Episode-boundary reset for a run already in progress: heals the player to full HP
-            // on the same run (no new RunState/map) and re-enters the encounter. See
-            // RunSimulator.HealAndEnterCombat -- cheaper than start_run when the caller just wants
-            // another shot at the same fight, not a brand new run.
+            // (or to "hp" if given, e.g. to replay a specific branch point's exact starting HP
+            // instead of always resetting to full) on the same run (no new RunState/map) and
+            // re-enters the encounter. See RunSimulator.HealAndEnterCombat -- cheaper than
+            // start_run when the caller just wants another shot at the same fight, not a brand
+            // new run.
             case "heal_and_enter_combat":
                 return sim.HealAndEnterCombat(
-                    cmd.TryGetProperty("encounter", out var enc3) ? enc3.GetString() ?? "SHRINKER_BEETLE_WEAK" : "SHRINKER_BEETLE_WEAK"
+                    cmd.TryGetProperty("encounter", out var enc3) ? enc3.GetString() ?? "SHRINKER_BEETLE_WEAK" : "SHRINKER_BEETLE_WEAK",
+                    cmd.TryGetProperty("hp", out var hp3) ? hp3.GetInt32() : (int?)null
                 );
 
             case "action":

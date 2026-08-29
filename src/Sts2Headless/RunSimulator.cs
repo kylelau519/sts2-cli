@@ -382,11 +382,13 @@ public partial class RunSimulator
     }
 
     /// <summary>
-    /// Cheap episode-boundary reset for training loops that farm one encounter repeatedly: heals
-    /// the player to full HP on the *same* run (same map/act/relics/deck) and re-enters the given
-    /// encounter, instead of tearing down the whole run via StartRun. This could be useful if .reset() becomes a blocking wall.
+    /// Cheap episode-boundary reset for training loops that farm one encounter repeatedly: sets
+    /// the player to full HP (or to targetHp, e.g. to reproduce a specific branch point's exact
+    /// starting HP instead of always giving a fresh-HP restart) on the *same* run (same
+    /// map/act/relics/deck) and re-enters the given encounter, instead of tearing down the whole
+    /// run via StartRun. This could be useful if .reset() becomes a blocking wall.
     /// </summary>
-    public Dictionary<string, object?> HealAndEnterCombat(string encounterId)
+    public Dictionary<string, object?> HealAndEnterCombat(string encounterId, int? targetHp = null)
     {
         try
         {
@@ -395,8 +397,22 @@ public partial class RunSimulator
             var creature = player.Creature;
             if (creature == null) return Error("Player has no creature");
 
-            if (creature.CurrentHp < creature.MaxHp)
-                creature.HealInternal((decimal)(creature.MaxHp - creature.CurrentHp));
+            int target = Math.Clamp(targetHp ?? creature.MaxHp, 1, creature.MaxHp);
+            if (creature.CurrentHp <= 0 && target > 0)
+            {
+                // Reviving from dead needs the real heal API so death->alive hooks fire (relics/
+                // potions that key off Player.ActivateHooks()/the Revived event) -- see
+                // HealInternal's original full-heal usage below.
+                creature.HealInternal((decimal)target);
+            }
+            else if (creature.CurrentHp != target)
+            {
+                // Already alive: no death/revival transition, so just correct the exact value the
+                // same way HealBetweenActs() and SetPlayer's "hp" arg do -- a raw field set, no
+                // heal/damage side effects (on-heal/on-hurt hooks, VFX, history) since this isn't a
+                // real in-fight heal or hit, just restoring a snapshot's starting HP.
+                SetField(creature, "_currentHp", target);
+            }
 
             var encModel = ModelDb.GetById<EncounterModel>(new ModelId("ENCOUNTER", encounterId));
             if (encModel == null) return Error($"Unknown encounter: {encounterId}");
