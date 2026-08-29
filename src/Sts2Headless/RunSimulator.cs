@@ -160,7 +160,20 @@ public partial class RunSimulator
     // original Task, so without tracking it here, WaitForActionExecutor() has no way to know the
     // op (e.g. SapphireSeed's Plant() finishing and calling SetEventFinished()) hasn't actually
     // completed yet by the time it returns -- see TrackBackground()'s docstring.
-    private Task? _pendingBackgroundOp;
+    //
+    // static, not instance: RunManager.Instance/CombatManager.Instance (which any background op
+    // here ultimately reads/writes) are process-wide singletons, not owned by any one RunSimulator
+    // instance (each in-process BufferSession -- see buffer_env.py's docstring -- constructs its
+    // own `new RunSimulator()`). A straggler left behind by one instance (its Action() call
+    // returned once a pending card_reward let it yield, but nothing ever resolved that reward, so
+    // its ManualResetEventSlim-blocked thread -- and whatever it does once released -- keeps
+    // running against the shared singletons) needs to be visible to -- and awaited by -- a
+    // *different*, later RunSimulator instance's StartRun(), or that instance's CleanUp() can race
+    // the straggler's own writes to the same shared state. Discovered via facility.py's branch
+    // worker: job N's un-resolved combat-end card_reward reward-grant continuation was still
+    // landing after job N+1's StartRun() had already begun, on a *new* RunSimulator/
+    // HeadlessCardSelector instance that had no way to see job N's still-running one.
+    private static Task? _pendingBackgroundOp;
 
     // Pending rewards for card selection (populated after combat, before proceeding)
     private List<Reward>? _pendingRewards;
@@ -186,7 +199,6 @@ public partial class RunSimulator
     private IReadOnlyList<IReadOnlyList<CardModel>>? _pendingBundles;
     private TaskCompletionSource<IEnumerable<CardModel>>? _pendingBundleTcs;
 
-    private static bool _cardSelectorRegistered;
     private static bool _combatEventsRegistered;
 
     private static readonly Tokenizer _tokenizer = new();
@@ -211,6 +223,11 @@ public partial class RunSimulator
     {
         try
         {
+            // See DrainPendingBackgroundOp()'s docstring: a straggler left behind by a *previous*
+            // run in this process (possibly a different RunSimulator instance entirely) can still
+            // be writing to RunManager.Instance/CombatManager.Instance right now -- wait for it to
+            // finish before CleanUp() resets those same shared singletons out from under it.
+            DrainPendingBackgroundOp();
             CleanUp();
             EnsureModelDbInitialized();
 
@@ -264,12 +281,26 @@ public partial class RunSimulator
             RunManager.Instance.EnterAct(0, doTransition: false).GetAwaiter().GetResult();
             Log("Entered Act 0");
 
-            // Register card selector for cards that need player choice
-            if (!_cardSelectorRegistered)
-            {
-                CardSelectCmd.UseSelector(_cardSelector);
-                _cardSelectorRegistered = true;
-            }
+            // Register THIS instance's card selector for cards that need player choice.
+            // CardSelectCmd.Selector is a process-wide stack (CardSelectCmd.cs) read via Peek();
+            // UseSelector() throws "A card selector is already active" if one's already
+            // registered -- which it always is, from the second RunSimulator in this process
+            // onward, since branch_worker_loop's while-loop constructs a new RunSimulator (via a
+            // new Sts2BufferSession) per job but the process, and hence this static stack,
+            // persists. PushSelector() is the one built for this -- its own docstring says "use
+            // this when you need temporary selector behavior (e.g., WhisperingEarring's
+            // auto-play)" -- it never throws, and Peek() always returns the most recently pushed
+            // entry, so this makes *this* instance's _cardSelector the active one regardless of
+            // what's already on the stack. (CardSelectCmd.Reset() looks like the obvious fix --
+            // its own docstring even says "prevent selectors leaked by stuck async tasks... from
+            // affecting subsequent runs" -- but its clearing logic is gated on `!TestMode.IsOn`,
+            // and EnsureModelDbInitialized() sets TestMode.IsOn = true, so it's a silent no-op
+            // here.) Previously guarded by a static "only once per process" flag, which avoided
+            // UseSelector's throw but meant every job after the first silently routed its
+            // select_cards/select_card_reward callbacks to the *first* job's selector instead of
+            // its own -- reproduced as "Sts2ActionError: No pending card reward"/"No pending card
+            // selection" on the second+ job any worker process handled.
+            CardSelectCmd.PushSelector(_cardSelector);
             BundlePatches._bundleSimRef = this;
 
             // Now we should be at the map — detect decision point
@@ -290,6 +321,7 @@ public partial class RunSimulator
     {
         try
         {
+            DrainPendingBackgroundOp();  // see StartRun()'s copy of this comment
             CleanUp();
             EnsureModelDbInitialized();
 
@@ -331,11 +363,7 @@ public partial class RunSimulator
 
             RunManager.Instance.FinalizeStartingRelics().GetAwaiter().GetResult();
 
-            if (!_cardSelectorRegistered)
-            {
-                CardSelectCmd.UseSelector(_cardSelector);
-                _cardSelectorRegistered = true;
-            }
+            CardSelectCmd.PushSelector(_cardSelector);  // see StartRun()'s copy of this comment
             BundlePatches._bundleSimRef = this;
 
             var encModel = ModelDb.GetById<EncounterModel>(new ModelId("ENCOUNTER", encounterId));
@@ -640,28 +668,9 @@ public partial class RunSimulator
             // Pump the synchronization context to execute any pending continuations
             _syncCtx.Pump();
 
-            // A background op tracked via TrackBackground() (event option Chosen(), shop
-            // purchase, rest-site option) may have yielded control back to an earlier Action()
-            // call at a pending selection that has SINCE been resolved by a later action -- e.g.
-            // select_cards resolving the TCS an event's Plant()/Eat() is awaiting. Its remaining
-            // continuation (applying the effect, then SetEventFinished()/finishing the purchase)
-            // can still be in flight right now on a ThreadPool thread. Without waiting for it
-            // here, the HasPending check below can read stale state (a just-resolved selection
-            // looking like nothing happened, or an event that hasn't actually closed out yet),
-            // letting the caller observe/act on state that's about to change out from under it --
-            // see this method's other stragglers comment below for the general class of bug.
-            if (_pendingBackgroundOp is { IsCompleted: false } trackedOp)
-            {
-                var swBg = Stopwatch.StartNew();
-                while (!trackedOp.IsCompleted && swBg.ElapsedMilliseconds < 2000)
-                {
-                    _syncCtx.Pump();
-                    SpinOrSleep(swBg.ElapsedMilliseconds);
-                }
-                _syncCtx.Pump();
-            }
-            if (_pendingBackgroundOp?.IsCompleted == true)
-                _pendingBackgroundOp = null;
+            // See DrainPendingBackgroundOp()'s docstring -- this is the mid-Action()-call half of
+            // that protection; StartRun()/StartRunIntoCombat() cover the cross-instance half.
+            DrainPendingBackgroundOp();
 
             // Executor may stay "running" while the game awaits headless card selection / reward (e.g. Attack Potion).
             // Spinning here would time out and downstream code could mis-handle an in-flight potion use (BUG-026).
@@ -736,6 +745,31 @@ public partial class RunSimulator
     }
 
     /// <summary>
+    /// Waits (bounded, 2s) for whatever background op TrackBackground() most recently registered
+    /// -- static/process-wide, so this sees a straggler left behind by a *different* RunSimulator
+    /// instance too, not just this one (see _pendingBackgroundOp's docstring for why that matters).
+    /// Called both mid-Action() (via WaitForActionExecutor(), before this instance trusts state it's
+    /// about to report) and at the top of StartRun()/StartRunIntoCombat() (before CleanUp() resets
+    /// the shared RunManager.Instance/CombatManager.Instance singletons a still-running straggler
+    /// from a *previous* run in this process might still be writing to).
+    /// </summary>
+    private static void DrainPendingBackgroundOp()
+    {
+        if (_pendingBackgroundOp is { IsCompleted: false } trackedOp)
+        {
+            var swBg = Stopwatch.StartNew();
+            while (!trackedOp.IsCompleted && swBg.ElapsedMilliseconds < 2000)
+            {
+                _syncCtx.Pump();
+                SpinOrSleep(swBg.ElapsedMilliseconds);
+            }
+            _syncCtx.Pump();
+        }
+        if (_pendingBackgroundOp?.IsCompleted == true)
+            _pendingBackgroundOp = null;
+    }
+
+    /// <summary>
     /// Backs off from a tight Pump() spin to a real OS sleep as elapsed time grows, so a
     /// same-thread continuation that's already available resolves in microseconds while a
     /// genuinely outstanding background-thread continuation doesn't peg a CPU core for its
@@ -770,6 +804,17 @@ public partial class RunSimulator
             if (player.Deck?.Cards != null)
                 foreach (var c in player.Deck.Cards)
                     if (c != null) hash.Add(c.Id);
+
+            // Reward-grant side effects (a potion/relic from a card_reward or event, applied by a
+            // background continuation resumed via ResolveReward/SkipReward -- see DoSkipCardReward
+            // in RunSimulator.Actions.cs) don't touch HP/gold/deck at all, so without these this
+            // fingerprint could look "stable" while that continuation is still landing.
+            if (player.Potions != null)
+                foreach (var p in player.Potions)
+                    if (p != null) hash.Add(p.Id);
+            if (player.Relics != null)
+                foreach (var r in player.Relics)
+                    if (r != null) hash.Add(r.Id);
 
             if (pcs != null)
             {

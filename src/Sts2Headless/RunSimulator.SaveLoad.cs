@@ -50,11 +50,7 @@ public partial class RunSimulator
                 CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
                 _combatEventsRegistered = true;
             }
-            if (!_cardSelectorRegistered)
-            {
-                CardSelectCmd.UseSelector(_cardSelector);
-                _cardSelectorRegistered = true;
-            }
+            CardSelectCmd.PushSelector(_cardSelector);  // see RunSimulator.cs's StartRun() for why
             BundlePatches._bundleSimRef = this;
 
             var savedRoom = _runState.CurrentRoom;
