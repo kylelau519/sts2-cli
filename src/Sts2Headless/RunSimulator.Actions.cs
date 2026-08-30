@@ -376,6 +376,7 @@ public partial class RunSimulator
             var idx = Convert.ToInt32(args["card_index"]);
             Log($"Resolving event card reward: index {idx}");
             _cardSelector.ResolveReward(idx);
+            TrackBackground(Task.Run(WaitForFingerprintStable));
             Thread.Sleep(50);
             _syncCtx.Pump();
             WaitForActionExecutor();
@@ -413,6 +414,7 @@ public partial class RunSimulator
         {
             Log("Skipping event card reward");
             _cardSelector.SkipReward();
+            TrackBackground(Task.Run(WaitForFingerprintStable));
             Thread.Sleep(50);
             _syncCtx.Pump();
             WaitForActionExecutor();

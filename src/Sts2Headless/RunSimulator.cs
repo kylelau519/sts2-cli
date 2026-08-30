@@ -761,6 +761,41 @@ public partial class RunSimulator
     }
 
     /// <summary>
+    /// Background-thread counterpart to WaitForActionExecutor()'s own fingerprint-stability loop
+    /// (see that method) -- for reward-grant continuations specifically (resumed via
+    /// HeadlessCardSelector.ResolveReward()/SkipReward(), see DoSelectCardReward/DoSkipCardReward
+    /// in RunSimulator.Actions.cs), which are NOT Task.Run-based like the ops TrackBackground()'s
+    /// other call sites track: GetSelectedCardReward blocks a thread on a bare
+    /// ManualResetEventSlim, so there's no Task to hand TrackBackground() directly for the
+    /// resumed continuation. WaitForActionExecutor()'s own loop is bounded at 400ms and runs only
+    /// on the calling thread within that same Action() call -- if the continuation takes longer,
+    /// that bound expires and control returns to the caller (and, in facility.py's branch-worker
+    /// reuse, straight into the *next* job's StartRun() on a fresh RunSimulator instance) while
+    /// the continuation is still landing, with no cross-instance visibility into that fact.
+    /// Running this same stabilization loop here, in a real Task.Run tracked via
+    /// TrackBackground(), gives it that visibility for free through the existing
+    /// _pendingBackgroundOp/DrainPendingBackgroundOp machinery -- both the mid-Action() wait and
+    /// StartRun()'s cross-instance one now also cover this straggler class, up to their existing
+    /// 2s bound, without needing a second tracking mechanism. Call this (via
+    /// TrackBackground(Task.Run(...))) right after SkipReward()/ResolveReward() unblocks the
+    /// selector's wait.
+    /// </summary>
+    private void WaitForFingerprintStable()
+    {
+        int? last = null;
+        int stableStreak = 0;
+        const int requiredStable = 5;
+        var sw = Stopwatch.StartNew();
+        while (stableStreak < requiredStable && sw.ElapsedMilliseconds < 2000)
+        {
+            SpinOrSleep(sw.ElapsedMilliseconds);
+            var fp = StabilityFingerprint();
+            if (fp == last) stableStreak++;
+            else { stableStreak = 1; last = fp; }
+        }
+    }
+
+    /// <summary>
     /// Waits (bounded, 2s) for whatever background op TrackBackground() most recently registered
     /// -- static/process-wide, so this sees a straggler left behind by a *different* RunSimulator
     /// instance too, not just this one (see _pendingBackgroundOp's docstring for why that matters).
