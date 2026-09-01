@@ -77,6 +77,28 @@ class Sts2Session:
         self.action_log = list(actions)
         return decision
 
+    def load_and_resume_combat(self, checkpoint_path: str, entry_action: dict,
+                                actions: list[dict]) -> Decision:
+        """Faster alternative to open_from_checkpoint for reconstructing a state inside a
+        combat: load_save(checkpoint_path) resumes from a native checkpoint taken just before
+        the room-entry action that started this combat, instead of replaying the whole run from
+        StartRun. entry_action re-enters the same room/encounter; actions are the in-combat
+        actions already taken this combat, bringing the session up to the branch point.
+        action_log ends up as [entry_action, *actions] -- this session has no memory of anything
+        before the checkpoint, so a caller that needs the full history for output is responsible
+        for prepending its own pre-combat prefix onto action_log afterward. See
+        Sts2BufferSession.load_and_resume_combat (buffer_env.py) for the in-process counterpart
+        this mirrors -- unlike that one, no manual error check is needed per action here, since
+        _to_decision already raises Sts2ActionError on an error response."""
+        self.load_save(checkpoint_path)
+        combined = [entry_action, *actions]
+        decision = None
+        for cmd in combined:
+            raw = self._send_raw(cmd)
+            decision = _to_decision(raw)
+        self.action_log = combined
+        return decision
+
     def step(self, action_name: str, **kwargs) -> Decision:
         cmd = action(action_name, **kwargs)
         self.action_log.append(cmd)
