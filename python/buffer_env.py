@@ -376,6 +376,34 @@ class Sts2BufferSession:
         self.action_log = list(actions)
         return self._decision(raw)
 
+    def load_and_resume_combat(self, checkpoint_path: str, entry_action: dict,
+                                actions: list[dict]) -> BufferDecision:
+        """Faster alternative to open_from_checkpoint for reconstructing a state inside a
+        combat: load_save(checkpoint_path) resumes from a native checkpoint taken just before
+        the room-entry action that started this combat, instead of replaying the whole run from
+        StartRun -- see facility.py's main_worker_loop for where that checkpoint is taken and
+        why it must be pre-entry (the checkpoint's mid-combat rollback restores map/room
+        metadata but not RNG stream position, and encounter selection consumes RNG at room-entry
+        time -- a checkpoint taken after entry would reload to a *different* encounter on
+        replay). entry_action re-enters the same room/encounter; actions are the in-combat
+        actions already taken this combat, bringing the session up to the branch point. Same
+        silent-replay contract as open_from_checkpoint: no logger calls for these already-known
+        actions. action_log ends up as [entry_action, *actions] -- this session has no memory of
+        anything before the checkpoint, so a caller that needs the full history for output
+        (facility.py's branch_worker_loop) is responsible for prepending its own pre-combat
+        prefix onto action_log afterward."""
+        self.load_save(checkpoint_path)
+        combined = [entry_action, *actions]
+        decision = None
+        for entry in combined:
+            args = entry.get("args")
+            raw = self._session.Action(entry["action"], json.dumps(args) if args else None)
+            decision = self._decision(raw)
+            if decision.decision == "error":
+                raise Sts2ActionError(self._session.LastError or "unknown error")
+        self.action_log = combined
+        return decision
+
     def step(self, action_name: str, **kwargs) -> BufferDecision:
         cmd = action(action_name, **kwargs)  # validates args the same way Sts2Session.step does
         self.action_log.append(cmd)
