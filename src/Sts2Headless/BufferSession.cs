@@ -101,6 +101,27 @@ namespace Sts2Headless
 
         public void RandomizeDrawPile(int seed) => _sim.RandomizeDrawPile(seed);
 
+        /// <summary>Writes a native checkpoint via RunSimulator.SaveCheckpoint -- the same call
+        /// Program.cs's "save"/"write_continue_save" JSON-protocol cases make, just in-process.
+        /// Returns the result dict as a JSON string (matching ExportTokenMap's precedent of
+        /// returning JSON across the pythonnet boundary rather than a marshaled Dictionary): the
+        /// Python caller parses it and checks "success" -- no active run / bad path comes back as
+        /// success:false + message, not a thrown exception, same as the JSON protocol.</summary>
+        public string Save(string path) => JsonSerializer.Serialize(_sim.SaveCheckpoint(path));
+
+        /// <summary>Loads a native checkpoint written by Save() (or the JSON protocol's
+        /// "save"/"write_continue_save"/"quit"), resuming into it -- see
+        /// RunSimulator.LoadSaveToBuffer for the redirect mechanism that writes the resulting
+        /// decision straight into `buffer` instead of a throwaway JSON dict. A missing file
+        /// throws (same as Python's own open() would) rather than going through LastError --
+        /// unlike an in-engine failure (bad schema, corrupt save), a missing path is a caller
+        /// bug, not a decision the caller branches on.</summary>
+        public float[] LoadSave(string path)
+        {
+            var saveJson = File.ReadAllText(path);
+            return _sim.LoadSaveToBuffer(saveJson, _buffer);
+        }
+
         /// <summary>Set by the most recent Action() call iff it returned DecisionType.Error --
         /// see RunSimulator.LastActionError. None (not stale) after a call that succeeded.</summary>
         public string? LastError => _sim.LastActionError;

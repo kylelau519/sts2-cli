@@ -72,6 +72,35 @@ public partial class RunSimulator
         return buffer;
     }
 
+    /// <summary>Buffer counterpart to LoadSave (RunSimulator.SaveLoad.cs) -- same redirect
+    /// mechanism as ExecuteActionToBuffer above: LoadSave's own early-return error dicts (bad
+    /// schema, unparseable JSON, no RunState) are built directly by Error(...), not through
+    /// DetectDecisionPoint, so they're caught here exactly like ExecuteActionToBuffer catches
+    /// ExecuteAction's; LoadSave's success path ends in `return DetectDecisionPoint();`, which
+    /// -- with _bufferRedirect set -- writes into buffer instead of building a throwaway JSON
+    /// dict. Takes the save file's raw JSON text (LoadSave's own parameter), not a path --
+    /// BufferSession.LoadSave is the one that reads the file, same layering as StartRun/Action
+    /// above taking already-resolved arguments.</summary>
+    public float[] LoadSaveToBuffer(string saveJson, float[]? buffer = null)
+    {
+        buffer ??= new float[BufferLayout.TotalSize];
+        var previous = _bufferRedirect;
+        var writer = new BufferStateWriter(this, buffer);
+        _bufferRedirect = writer;
+        LastActionError = null;
+        try
+        {
+            var result = LoadSave(saveJson);
+            if (result.TryGetValue("type", out var type) && (type as string) == "error")
+            {
+                LastActionError = result.TryGetValue("message", out var m) ? m as string ?? "unknown error" : "unknown error";
+                writer.WriteError(LastActionError);
+            }
+        }
+        finally { _bufferRedirect = previous; }
+        return buffer;
+    }
+
     /// <summary>Tags buffer[0] so a consumer can dispatch to the right fixed layout without any
     /// other bookkeeping.</summary>
     public enum DecisionType

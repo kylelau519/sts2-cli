@@ -15,7 +15,6 @@ import subprocess
 from actions import action
 from installation import DOTNET, PROJECT
 from models import Decision, parse_decision
-from save_load import _save_game
 
 
 class Sts2ActionError(RuntimeError):
@@ -118,8 +117,26 @@ class Sts2Session:
             self._map_cache = self._send_raw({"cmd": "get_map"})
         return self._map_cache
 
-    def save(self, path: str) -> None:
-        _save_game(path, self.character, self.seed, self.action_log)
+    def save(self, path: str) -> dict:
+        """Write a native sts2 checkpoint at `path` (RunSimulator.SaveCheckpoint) -- resumable
+        with load_save/open_from_checkpoint, unlike the replay-log format _save_game writes.
+        Raises Sts2ActionError if there's no active run or the engine-side write fails."""
+        result = self._send_raw({"cmd": "save", "path": path})
+        if not result.get("success"):
+            raise Sts2ActionError(result.get("message", "save failed"))
+        return result
+
+    def load_save(self, path: str) -> Decision:
+        """Load a native checkpoint written by save() and resume into it -- counterpart to
+        save(). Unlike open_from_checkpoint (replays an action list against a fresh StartRun),
+        this resumes directly from the save's own embedded state/RNG, so it doesn't need
+        character/seed/ascension or a prior action log; action_log is reset (empty) since there's
+        no history to speak of, only the state the checkpoint captured. Raises Sts2ActionError if
+        the file is missing, unparseable, or fails schema validation."""
+        self._map_cache = None
+        self.action_log = []
+        raw = self._send_raw({"cmd": "load_save", "path": path})
+        return _to_decision(raw)
 
     def close(self):
         try:

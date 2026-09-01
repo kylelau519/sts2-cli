@@ -209,6 +209,11 @@ class Program
                 return sim.SetDrawOrder(cards);
             }
 
+            // "save" is the general-purpose entry point for writing a native checkpoint at any
+            // point during a run -- decoupled from quitting or the --continue flow. Kept as a
+            // separate case (not just a rename) since "write_continue_save" is already a stable
+            // name external callers (play.py) send.
+            case "save":
             case "write_continue_save":
             {
                 var outputPath = cmd.TryGetProperty("path", out var op) ? op.GetString() : null;

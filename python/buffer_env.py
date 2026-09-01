@@ -402,5 +402,29 @@ class Sts2BufferSession:
             return
         self._session.RandomizeDrawPile(seed if seed is not None else 0)
 
+    def save(self, path: str) -> dict:
+        """Write a native sts2 checkpoint at `path` -- same RunSimulator.SaveCheckpoint call
+        Sts2Session.save() makes over the JSON protocol (see env.py), just in-process via
+        BufferSession.Save. Raises Sts2ActionError if there's no active run or the write fails."""
+        result = json.loads(self._session.Save(path))
+        if not result.get("success"):
+            raise Sts2ActionError(result.get("message", "save failed"))
+        return result
+
+    def load_save(self, path: str) -> BufferDecision:
+        """Load a native checkpoint written by save() and resume into it -- counterpart to
+        save(), and the in-process equivalent of Sts2Session.load_save(). No character/seed/
+        ascension or prior action log needed (unlike open_from_checkpoint): the checkpoint
+        carries its own state/RNG. action_log is reset to empty -- same reasoning as
+        Sts2Session.load_save(). Raises FileNotFoundError if `path` doesn't exist (a caller bug,
+        not a decision to branch on -- see BufferSession.LoadSave's docstring) and
+        Sts2ActionError if the engine-side load fails (missing run, bad schema, corrupt save)."""
+        self.action_log = []
+        arr = self._session.LoadSave(path)
+        decision = self._decision(arr)
+        if decision.decision == "error":
+            raise Sts2ActionError(self._session.LastError or "unknown error")
+        return decision
+
     def close(self) -> None:
         pass  # in-process -- no subprocess to tear down; the C# side is GC'd with this object
