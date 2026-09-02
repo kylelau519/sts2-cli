@@ -3,10 +3,7 @@ stdin/stdout: no subprocess (RunSimulator runs directly in this Python process v
 no per-step dict/pydantic decode -- every call hands back a BufferDecision, a thin wrapper around a
 numpy float32 array plus BufferSession-consistent offset math (see buffer_layout.py), not an object
 graph. That object-graph decode step (JSON -> dict -> pydantic validate_python) was measured as the
-actual bottleneck in whispering_earring's branch-worker/MCTS hot path -- see its README -- separate
-from (and on top of) the subprocess-spawn cost env.py's own docstring already addresses. This session
-type is for that hot path specifically; the main self-play line keeps using Sts2Session/pydantic
-Decision, since it never touches combat_play directly (see facility.py's main_worker_loop).
+actual bottleneck in whispering_earring's branch-worker/
 
 Same public shape as Sts2Session (start/open_from_checkpoint/step/randomize_draw_pile/close,
 action_log/character/seed/ascension) so callers built against one can switch to the other with
@@ -300,8 +297,7 @@ def decode_buffer(arr: np.ndarray) -> dict:
 class BufferDecision:
     """arr: a numpy float32 array this instance owns exclusively (a fresh copy out of
     BufferSession's reused native buffer -- see Sts2BufferSession._decision(); never aliases the
-    C# side's buffer, so a Node cached in mcts.py's tree stays valid across later step() calls on
-    the same session, which reuse that native buffer in place)."""
+    C# side's buffer"""
 
     __slots__ = ("arr", "decision")
 

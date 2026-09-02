@@ -200,8 +200,7 @@ public partial class RunSimulator
         {
             "damage", "block", "magicnumber", "secondarydamage", "secondarymagicnumber",
             "calculateddamage", "repeat", "heal",
-            "cards", // draw count (e.g. Pommel Strike) -- Vakuu's mcts.py needs this to detect a
-                     // card-drawing play as a chance node (see its draws_cards()).
+            "cards",
         };
 
         private readonly RunSimulator _sim;
