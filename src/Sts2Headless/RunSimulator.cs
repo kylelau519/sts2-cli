@@ -279,7 +279,7 @@ public partial class RunSimulator
 
             // Enter first act (generates map)
             RunManager.Instance.EnterAct(0, doTransition: false).GetAwaiter().GetResult();
-            Log("Entered Act 0");
+            Log("Entered Act 1");
 
             // Register THIS instance's card selector for cards that need player choice.
             // CardSelectCmd.Selector is a process-wide stack (CardSelectCmd.cs) read via Peek();

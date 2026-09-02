@@ -90,7 +90,7 @@ public partial class RunSimulator
                     _runState.ExtraFields.StartedWithNeow = false;
                 RunManager.Instance.EnterAct(_runState.CurrentActIndex, doTransition: false).GetAwaiter().GetResult();
                 _syncCtx.Pump();
-                Log($"Entered Act {_runState.CurrentActIndex}");
+                Log($"Entered Act {_runState.CurrentActIndex + 1}");
 
                 if (shouldResumeInitialNeow && _runState.Map?.StartingMapPoint != null)
                 {
