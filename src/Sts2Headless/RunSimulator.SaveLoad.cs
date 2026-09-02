@@ -60,6 +60,24 @@ public partial class RunSimulator
             var shouldResumeInitialNeow = IsInitialNeowSave(saveJson);
             Log($"Save has {savedVisitedCoords.Count} visited coords");
 
+            // EnterAct -> SetActInternal unconditionally calls Odds.UnknownMapPoint.ResetToBase()
+            // (RunManager.cs's SetActInternal) -- correct for an actual new-act transition, wrong
+            // here: we call EnterAct below purely to reconstruct map-screen state for a mid-act
+            // resume, and RunState.FromSerializable(save) (via RunOddsSet.FromSerializable) just
+            // restored the real accumulated "?"-node pity-timer odds a few lines up. Without this,
+            // every load_save resets that pity timer to base, which can silently change what an
+            // Unknown ("?") map point resolves to on replay vs. what the original session actually
+            // got (confirmed: Monster is the outcome most likely to flip, since it sits at the
+            // smallest/first-checked cumulative-probability slot in UnknownMapPointOdds.Roll --
+            // see Vakuu's whispering_earring_unknown_node_combat_checkpoint_bug memory for the
+            // training-data bug this was traced from). Same snapshot-before/restore-after pattern
+            // as savedVisitedCoords/ActFloor below, just for the odds instead of map position.
+            var savedOdds = _runState.Odds?.UnknownMapPoint;
+            var savedMonsterOdds = savedOdds?.MonsterOdds;
+            var savedEliteOdds = savedOdds?.EliteOdds;
+            var savedTreasureOdds = savedOdds?.TreasureOdds;
+            var savedShopOdds = savedOdds?.ShopOdds;
+
             RunManager.Instance.Launch();
             Log("Run launched");
 
@@ -92,6 +110,19 @@ public partial class RunSimulator
                     _runState.ActFloor = savedVisitedCoords.Count;
                     var last = savedVisitedCoords[^1];
                     Log($"Restored map position: floor={_runState.ActFloor}, coord=({last.col},{last.row})");
+                }
+
+                // Restore the "?"-node pity-timer odds EnterAct just reset to base -- see the
+                // comment above savedOdds for why.
+                if (savedOdds != null && _runState.Odds?.UnknownMapPoint is { } restoredOdds)
+                {
+                    restoredOdds.MonsterOdds = savedMonsterOdds!.Value;
+                    restoredOdds.EliteOdds = savedEliteOdds!.Value;
+                    restoredOdds.TreasureOdds = savedTreasureOdds!.Value;
+                    restoredOdds.ShopOdds = savedShopOdds!.Value;
+                    Log($"Restored UnknownMapPoint odds: monster={restoredOdds.MonsterOdds}, "
+                        + $"elite={restoredOdds.EliteOdds}, treasure={restoredOdds.TreasureOdds}, "
+                        + $"shop={restoredOdds.ShopOdds}");
                 }
             }
             else
