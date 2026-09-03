@@ -903,6 +903,24 @@ public partial class RunSimulator
 
     private Dictionary<string, object?> DoLeaveRoom(Player player)
     {
+        // Must check _bufferRedirect the same way DetectDecisionPoint() does (RunSimulator.States.cs)
+        // -- unconditionally pinning _writer to _jsonWriter here breaks buffer-mode callers
+        // (Sts2BufferSession): DoLeaveRoomCore's own DetectDecisionPointCore() call would then write
+        // the post-leave decision into _jsonWriter.Dict, which nothing reads back in buffer mode,
+        // instead of into the caller's actual float buffer -- ExecuteActionToBuffer returns that
+        // buffer untouched (still encoding whatever decision was there before leave_room), so a
+        // buffer-mode caller sees no state change and, if its policy re-issues leave_room for the
+        // same (apparently unchanged) shop/rest_site/event_choice decision, loops forever even
+        // though the engine's own room/decision state already advanced correctly on the first call.
+        // Confirmed live via facility_choices_paradox.py's option-chains (Sts2BufferSession): the
+        // room genuinely becomes a MapRoom and _jsonWriter.Dict genuinely holds "map_select" after
+        // the very first leave_room, but the caller kept receiving the stale pre-leave decision.
+        if (_bufferRedirect != null)
+        {
+            _writer = _bufferRedirect;
+            DoLeaveRoomCore(player);
+            return _jsonWriter.Dict;
+        }
         _writer = _jsonWriter;
         _jsonWriter.Reset();
         DoLeaveRoomCore(player);

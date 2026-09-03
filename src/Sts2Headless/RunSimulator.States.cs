@@ -304,6 +304,16 @@ public partial class RunSimulator
 
     private Dictionary<string, object?> MapSelectState()
     {
+        // Same _bufferRedirect check as DetectDecisionPoint() above, for the same reason -- see
+        // DoLeaveRoom's comment (RunSimulator.Actions.cs) for the buffer-mode failure mode this
+        // avoids. Reached via DoSelectCards (rest site SMITH) and DoChooseOption (rest site
+        // HEAL/etc.)'s own force-to-map paths.
+        if (_bufferRedirect != null)
+        {
+            _writer = _bufferRedirect;
+            MapSelectStateCore();
+            return _jsonWriter.Dict;
+        }
         _writer = _jsonWriter;
         _jsonWriter.Reset();
         MapSelectStateCore();
@@ -603,6 +613,17 @@ public partial class RunSimulator
 
     private Dictionary<string, object?> GameOverState(bool isVictory)
     {
+        // Same _bufferRedirect check as DetectDecisionPoint()/MapSelectState() -- see DoLeaveRoom's
+        // comment (RunSimulator.Actions.cs) for the buffer-mode failure this avoids. Without it, a
+        // buffer-mode caller reaching death/victory through this path (rather than through
+        // DetectDecisionPointCore's own game-over checks) would never see "game_over" in its
+        // buffer, since the write would go to the discarded _jsonWriter.Dict instead.
+        if (_bufferRedirect != null)
+        {
+            _writer = _bufferRedirect;
+            GameOverStateCore(isVictory);
+            return _jsonWriter.Dict;
+        }
         _writer = _jsonWriter;
         _jsonWriter.Reset();
         GameOverStateCore(isVictory);
