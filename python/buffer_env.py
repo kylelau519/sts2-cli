@@ -13,13 +13,15 @@ a BufferDecision (numpy-backed, buffer_layout accessors) instead of a pydantic D
 from __future__ import annotations
 
 import json
+import queue
+import threading
 
 import numpy as np
 
 import buffer_layout as bl
 from actions import action
 from clr_bridge import load_clr
-from env import Sts2ActionError
+from env import _DEFAULT_ENGINE_TIMEOUT, Sts2ActionError, Sts2EngineTimeoutError
 
 _token_map: dict[int, str] | None = None  # int -> "CATEGORY:ID", loaded once per process
 
@@ -329,7 +331,7 @@ class BufferDecision:
 
 
 class Sts2BufferSession:
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, timeout: float = _DEFAULT_ENGINE_TIMEOUT):
         self._session = load_clr().BufferSession()
         actual_size = int(self._session.BufferSize)
         assert actual_size == bl.TOTAL_SIZE, (
@@ -338,10 +340,52 @@ class Sts2BufferSession:
             f"the Python mirror being updated to match"
         )
         self.logger = logger
+        self.timeout = timeout
         self.action_log: list[dict] = []
         self.character: str | None = None
         self.seed: str | None = None
         self.ascension: int = 0
+
+    def _call(self, fn, *args):
+        """Runs one blocking CLR call (RunSimulator, in-process via pythonnet) on a fresh daemon
+        thread and bounds how long THIS thread waits for it to return. Unlike Sts2Session's
+        subprocess call, there's no cooperative cancellation point inside a native CLR call and no
+        separate process to kill on timeout -- so on timeout the call keeps running forever on
+        that thread regardless of what this method does. What this still buys: the CALLER gets
+        Sts2EngineTimeoutError back instead of hanging forever itself (letting
+        branch_worker_loop/main_worker_loop report an error and move on) rather than wedging the
+        whole worker with no recovery, which is what happened before this existed (see
+        Sts2EngineTimeoutError's docstring).
+
+        A plain daemon Thread, deliberately NOT concurrent.futures.ThreadPoolExecutor -- confirmed
+        by hand that a pool doesn't actually solve this: its worker threads are joined by an
+        atexit hook (concurrent.futures.thread._python_exit) that every pool shares process-wide,
+        so ONE stuck call, even in an already-shutdown(wait=False) pool, permanently blocks this
+        whole process from ever exiting cleanly again -- the exact failure mode this exists to
+        avoid, just deferred to shutdown time instead of call time. A plain daemon thread carries
+        no such promise: the interpreter simply abandons it at exit, so a stuck call leaks one
+        thread (and whatever native state it left mid-call) for the rest of this process's life,
+        same as the pool version, but WITHOUT also blocking that process's own eventual exit."""
+        result: queue.Queue = queue.Queue(maxsize=1)
+
+        def run() -> None:
+            try:
+                result.put(("ok", fn(*args)))
+            except BaseException as e:  # noqa: BLE001 -- relayed to the caller's thread below,
+                # not swallowed; must catch broadly since fn is arbitrary CLR-call surface.
+                result.put(("error", e))
+
+        threading.Thread(target=run, daemon=True, name="sts2-clr-call").start()
+        try:
+            kind, value = result.get(timeout=self.timeout)
+        except queue.Empty:
+            raise Sts2EngineTimeoutError(
+                f"BufferSession call didn't respond within {self.timeout}s -- treating it (and "
+                f"this whole process) as hung"
+            ) from None
+        if kind == "error":
+            raise value
+        return value
 
     def _decision(self, raw) -> BufferDecision:
         return BufferDecision(np.array(raw, dtype=np.float32))
@@ -349,7 +393,7 @@ class Sts2BufferSession:
     def start(self, character: str, seed: str, ascension: int = 0) -> BufferDecision:
         self.character, self.seed, self.ascension = character, seed, ascension
         self.action_log = []
-        return self._decision(self._session.StartRun(character, seed, ascension))
+        return self._decision(self._call(self._session.StartRun, character, seed, ascension))
 
     def open_from_checkpoint(self, character: str, seed: str, ascension: int,
                               actions: list[dict]) -> BufferDecision:
@@ -359,10 +403,10 @@ class Sts2BufferSession:
         caller would do) -- the caller otherwise only inspects the *final* decision reached, same
         as the JSON path's own `decision` local being overwritten every loop iteration."""
         self.character, self.seed, self.ascension = character, seed, ascension
-        raw = self._session.StartRun(character, seed, ascension)
+        raw = self._call(self._session.StartRun, character, seed, ascension)
         for entry in actions:
             args = entry.get("args")
-            raw = self._session.Action(entry["action"], json.dumps(args) if args else None)
+            raw = self._call(self._session.Action, entry["action"], json.dumps(args) if args else None)
             if self._decision(raw).decision == "error":
                 # See step()'s docstring -- a checkpoint's own prefix can itself contain an
                 # action that only ever silently no-op'd (recorded as if it succeeded) rather
@@ -393,7 +437,7 @@ class Sts2BufferSession:
         decision = None
         for entry in combined:
             args = entry.get("args")
-            raw = self._session.Action(entry["action"], json.dumps(args) if args else None)
+            raw = self._call(self._session.Action, entry["action"], json.dumps(args) if args else None)
             decision = self._decision(raw)
             if decision.decision == "error":
                 raise Sts2ActionError(self._session.LastError or "unknown error")
@@ -406,7 +450,7 @@ class Sts2BufferSession:
         if self.logger:
             self.logger.log_action(cmd)
         args = cmd.get("args")
-        raw = self._session.Action(action_name, json.dumps(args) if args else None)
+        raw = self._call(self._session.Action, action_name, json.dumps(args) if args else None)
         decision = self._decision(raw)
         if decision.decision == "error":
             # A failed action leaves BufferSession's native buffer completely untouched (no
@@ -424,13 +468,13 @@ class Sts2BufferSession:
         JSON protocol's card-id-list set_draw_order (no ids to round-trip in-process)."""
         if getattr(state, "decision", None) != "combat_play":
             return
-        self._session.RandomizeDrawPile(seed if seed is not None else 0)
+        self._call(self._session.RandomizeDrawPile, seed if seed is not None else 0)
 
     def save(self, path: str) -> dict:
         """Write a native sts2 checkpoint at `path` -- same RunSimulator.SaveCheckpoint call
         Sts2Session.save() makes over the JSON protocol (see env.py), just in-process via
         BufferSession.Save. Raises Sts2ActionError if there's no active run or the write fails."""
-        result = json.loads(self._session.Save(path))
+        result = json.loads(self._call(self._session.Save, path))
         if not result.get("success"):
             raise Sts2ActionError(result.get("message", "save failed"))
         return result
@@ -444,11 +488,13 @@ class Sts2BufferSession:
         not a decision to branch on -- see BufferSession.LoadSave's docstring) and
         Sts2ActionError if the engine-side load fails (missing run, bad schema, corrupt save)."""
         self.action_log = []
-        arr = self._session.LoadSave(path)
+        arr = self._call(self._session.LoadSave, path)
         decision = self._decision(arr)
         if decision.decision == "error":
             raise Sts2ActionError(self._session.LastError or "unknown error")
         return decision
 
     def close(self) -> None:
-        pass  # in-process -- no subprocess to tear down; the C# side is GC'd with this object
+        pass  # in-process -- no subprocess to tear down; the C# side is GC'd with this object.
+        # _call's threads are daemon and self-contained (no pool/registry to shut down here) --
+        # see _call's own docstring for why that's deliberate.

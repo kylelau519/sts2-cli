@@ -10,15 +10,42 @@ from __future__ import annotations
 
 import json
 import random
+import select
 import subprocess
+import time
 
 from actions import action
 from installation import DOTNET, PROJECT
 from models import Decision, parse_decision
 
+# Per-engine-round-trip budget: generous enough to absorb a slow response under heavy concurrent
+# load (many worker processes' dotnet subprocesses contending for the same CPU cores), but finite
+# -- see Sts2EngineTimeoutError's own docstring for why finite matters at all. Comfortably below
+# facility_common.py's own 120s _wait_for_turn_result budget for a whole turn (which spans
+# multiple engine calls across cfg.branches_per_turn branches), so a single stuck call trips this
+# first rather than silently eating that entire outer budget.
+_DEFAULT_ENGINE_TIMEOUT = 90.0
+
 
 class Sts2ActionError(RuntimeError):
     ...
+
+
+class Sts2EngineTimeoutError(RuntimeError):
+    """The sts2-cli engine didn't respond to one call within `timeout` seconds. Confirmed live
+    (not hypothetical): a training_claws.sh run stalled for 18+ minutes with every worker at 0%
+    CPU, one main-worker process already an unreaped zombie, and zero new output -- traced to
+    Sts2Session._read_raw()'s readline() blocking forever with no timeout at all, so a single
+    wedged sts2-cli subprocess (e.g. from a load/save-divergence edge case putting RunSimulator in
+    an unexpected state) permanently ate one worker-pool slot with no way to notice or recover.
+
+    Raising this doesn't undo whatever half-finished state the stuck call left behind -- treat the
+    session as unrecoverable once this fires, not just slow: Sts2Session's subprocess is killed
+    before this is raised (see _kill()), so a caller should drop the session and get a fresh one.
+    Sts2BufferSession has no subprocess to kill (see its own docstring on this exception) -- the
+    stuck CLR call keeps running forever on an abandoned thread, so the entire OWNING PROCESS is
+    what's actually unrecoverable there, not just the session object."""
+
 
 def _to_decision(raw: dict) -> Decision:
     if raw.get("type") == "error":
@@ -27,7 +54,7 @@ def _to_decision(raw: dict) -> Decision:
 
 
 class Sts2Session:
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, timeout: float = _DEFAULT_ENGINE_TIMEOUT):
         dotnet = str(DOTNET or "dotnet")
         self.proc = subprocess.Popen(
             [dotnet, "run", "--no-build", "--project", str(PROJECT)],
@@ -35,6 +62,7 @@ class Sts2Session:
             stderr=subprocess.DEVNULL, text=True, bufsize=1,
         )
         self.logger = logger
+        self.timeout = timeout
         self.action_log: list[dict] = []
         self.character: str | None = None
         self.seed: str | None = None
@@ -42,8 +70,29 @@ class Sts2Session:
         self._map_cache: dict | None = None
         self._read_raw()  # consume the initial "ready" line
 
+    def _kill(self) -> None:
+        """Emergency teardown for a subprocess that's just been declared hung -- unlike close(),
+        doesn't bother trying to send "quit" first (the whole point is this subprocess isn't
+        responding to writes either)."""
+        try:
+            self.proc.kill()
+            self.proc.wait(timeout=5)
+        except Exception:
+            pass
+
     def _read_raw(self) -> dict:
+        deadline = time.monotonic() + self.timeout
         while True:
+            remaining = deadline - time.monotonic()
+            # select() on the pipe's fd first, rather than calling readline() directly, is what
+            # makes this interruptible at all -- readline() itself has no timeout parameter and
+            # would just block forever past the deadline once called.
+            if remaining <= 0 or not select.select([self.proc.stdout], [], [], remaining)[0]:
+                self._kill()
+                raise Sts2EngineTimeoutError(
+                    f"sts2-cli subprocess didn't respond within {self.timeout}s -- treating it "
+                    f"as hung and killing it"
+                )
             line = self.proc.stdout.readline()
             if line == "":
                 raise RuntimeError("sts2-cli subprocess closed unexpectedly")
