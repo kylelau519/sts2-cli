@@ -330,6 +330,54 @@ class BufferDecision:
         return f"BufferDecision({self.decision!r})"
 
 
+class _ClrWorker:
+    """One persistent daemon thread that serially runs blocking CLR calls handed to it via a
+    request queue, replying via a per-call response queue -- Sts2BufferSession._call's actual
+    timeout/recovery mechanism, split out so a session can swap in a fresh one after abandoning a
+    stuck call (see _call's docstring) without repeating this bookkeeping. Amortizes thread-spawn
+    cost across every call made through one worker (measured ~2.4x cheaper per call than spawning
+    a fresh thread per call, since a hot branch-worker loop calls .Action() once per turn action)
+    -- the request/response queue handoff is the only per-call cost once the thread is up."""
+
+    def __init__(self) -> None:
+        self._requests: queue.Queue = queue.Queue()
+        threading.Thread(target=self._loop, daemon=True, name="sts2-clr-call").start()
+
+    def _loop(self) -> None:
+        while True:
+            item = self._requests.get()
+            if item is None:  # stop() sentinel
+                return
+            fn, args, response = item
+            try:
+                response.put(("ok", fn(*args)))
+            except BaseException as e:  # noqa: BLE001 -- relayed to the caller's thread via
+                # `response`, not swallowed; must catch broadly since fn is arbitrary CLR-call
+                # surface (only Sts2ActionError/timeout are expected, but anything native-side
+                # could in principle surface here).
+                response.put(("error", e))
+
+    def call(self, fn, *args, timeout: float):
+        """Raises queue.Empty (not caught here) if `fn` doesn't respond within `timeout` --
+        Sts2BufferSession._call is what turns that into Sts2EngineTimeoutError and decides what
+        to do with this now-presumed-stuck worker. Never confusable with a genuine TimeoutError
+        `fn` itself might raise: that arrives as ("error", e) and gets re-raised as `e` below, a
+        distinct code path from the queue.Empty this raises on its own."""
+        response: queue.Queue = queue.Queue(maxsize=1)
+        self._requests.put((fn, args, response))
+        kind, value = response.get(timeout=timeout)
+        if kind == "error":
+            raise value
+        return value
+
+    def stop(self) -> None:
+        # Non-blocking by construction (Queue.put doesn't wait for the item to be consumed): if
+        # the loop is mid-call (stuck), it never sees this sentinel, and that's fine -- it's a
+        # daemon thread either way, abandoned at process exit regardless of whether it ever loops
+        # back around to read it.
+        self._requests.put(None)
+
+
 class Sts2BufferSession:
     def __init__(self, logger=None, timeout: float = _DEFAULT_ENGINE_TIMEOUT):
         self._session = load_clr().BufferSession()
@@ -345,47 +393,30 @@ class Sts2BufferSession:
         self.character: str | None = None
         self.seed: str | None = None
         self.ascension: int = 0
+        self._worker = _ClrWorker()
 
     def _call(self, fn, *args):
-        """Runs one blocking CLR call (RunSimulator, in-process via pythonnet) on a fresh daemon
-        thread and bounds how long THIS thread waits for it to return. Unlike Sts2Session's
-        subprocess call, there's no cooperative cancellation point inside a native CLR call and no
-        separate process to kill on timeout -- so on timeout the call keeps running forever on
-        that thread regardless of what this method does. What this still buys: the CALLER gets
-        Sts2EngineTimeoutError back instead of hanging forever itself (letting
-        branch_worker_loop/main_worker_loop report an error and move on) rather than wedging the
-        whole worker with no recovery, which is what happened before this existed (see
-        Sts2EngineTimeoutError's docstring).
-
-        A plain daemon Thread, deliberately NOT concurrent.futures.ThreadPoolExecutor -- confirmed
-        by hand that a pool doesn't actually solve this: its worker threads are joined by an
-        atexit hook (concurrent.futures.thread._python_exit) that every pool shares process-wide,
-        so ONE stuck call, even in an already-shutdown(wait=False) pool, permanently blocks this
-        whole process from ever exiting cleanly again -- the exact failure mode this exists to
-        avoid, just deferred to shutdown time instead of call time. A plain daemon thread carries
-        no such promise: the interpreter simply abandons it at exit, so a stuck call leaks one
-        thread (and whatever native state it left mid-call) for the rest of this process's life,
-        same as the pool version, but WITHOUT also blocking that process's own eventual exit."""
-        result: queue.Queue = queue.Queue(maxsize=1)
-
-        def run() -> None:
-            try:
-                result.put(("ok", fn(*args)))
-            except BaseException as e:  # noqa: BLE001 -- relayed to the caller's thread below,
-                # not swallowed; must catch broadly since fn is arbitrary CLR-call surface.
-                result.put(("error", e))
-
-        threading.Thread(target=run, daemon=True, name="sts2-clr-call").start()
+        """Runs one blocking CLR call (RunSimulator, in-process via pythonnet) through this
+        session's persistent _ClrWorker and bounds how long this method waits for it to return.
+        Unlike Sts2Session's subprocess call, there's no cooperative cancellation point inside a
+        native CLR call and no separate process to kill on timeout -- so on timeout the call keeps
+        running forever on the worker's thread regardless of what this method does. What this
+        still buys: the CALLER gets Sts2EngineTimeoutError back instead of hanging forever itself
+        (letting branch_worker_loop/main_worker_loop report an error and move on) rather than
+        wedging the whole worker with no recovery, which is what happened before this existed (see
+        Sts2EngineTimeoutError's docstring). A fresh _ClrWorker replaces the stuck one so the NEXT
+        call on this session gets a clean thread instead of queuing forever behind a permanently
+        stuck one -- the abandoned worker (and whatever native state its stuck call left behind)
+        is still leaked for the rest of this process's life, same tradeoff _ClrWorker's own
+        docstring describes, just amortized across every call instead of paid on every one."""
         try:
-            kind, value = result.get(timeout=self.timeout)
+            return self._worker.call(fn, *args, timeout=self.timeout)
         except queue.Empty:
+            self._worker = _ClrWorker()
             raise Sts2EngineTimeoutError(
                 f"BufferSession call didn't respond within {self.timeout}s -- treating it (and "
                 f"this whole process) as hung"
             ) from None
-        if kind == "error":
-            raise value
-        return value
 
     def _decision(self, raw) -> BufferDecision:
         return BufferDecision(np.array(raw, dtype=np.float32))
@@ -495,6 +526,8 @@ class Sts2BufferSession:
         return decision
 
     def close(self) -> None:
-        pass  # in-process -- no subprocess to tear down; the C# side is GC'd with this object.
-        # _call's threads are daemon and self-contained (no pool/registry to shut down here) --
-        # see _call's own docstring for why that's deliberate.
+        # No subprocess to tear down -- the C# side is GC'd with this object. stop() is a
+        # best-effort, non-blocking ask for the worker thread to exit its loop -- if it's mid-call
+        # (stuck), it never gets the message and stays leaked, same as any other stuck-call
+        # aftermath (see _ClrWorker.stop()'s own comment).
+        self._worker.stop()
