@@ -185,7 +185,7 @@ sizing.
 | 11 | `CanPlay()` (1/0) |
 | 12 | `CurrentStarCost` |
 | 13 | `TargetType` raw enum ordinal (`None=0, Self=1, AnyEnemy=2, AllEnemies=3, RandomEnemy=4, AnyPlayer=5, AnyAlly=6, AllAllies=7, TargetedNoCreature=8, Osty=9`), `-1` if empty slot — needed to tell an `AnyEnemy` card (fan out per-enemy `play_card` options, requires `target_index`) apart from `AllEnemies`/`Self`/`None` (single no-target option); per-target damage below can't disambiguate those on its own since `AllEnemies` cards also populate a damage row per enemy |
-| [14–22] | resolved `DynamicVars`, fixed subset (`HandCardStatKeys`, in order): `damage, block, magicnumber, secondarydamage, secondarymagicnumber, calculateddamage, repeat, heal, cards` — each `-1` if the card has no such var. `cards` is the draw-count var (e.g. Pommel Strike's "draw 1") -- added for Vakuu's MCTS chance-node detection (`draws_cards()`) |
+| [14–22] | resolved `DynamicVars`, fixed subset (`HandCardStatKeys`, in order): `damage, block, magicnumber, secondarydamage, secondarymagicnumber, calculateddamage, repeat, heal, cards` — each `-1` if the card has no such var. `cards` is the draw-count var (e.g. Pommel Strike's "draw 1") 
 | [23–32] | per-target damage against up to 5 alive enemies (`MaxEnemies`): 2 floats each (damage, repeat), `-1,-1` if no such target |
 
 **Enemy slot — 25 floats:**
@@ -355,18 +355,5 @@ hand rather than relying on the assert to catch everything.
 `Sts2BufferSession` is the buffer-protocol counterpart to `env.py`'s `Sts2Session` (same
 start/open_from_checkpoint/step/randomize_draw_pile/close shape), but in-process (no subprocess, via
 pythonnet + `BufferSession.cs`) and returning a `BufferDecision` (a numpy view over one decision's record,
-via `buffer_layout.py`'s accessor functions) instead of a JSON-decoded pydantic `Decision`. See
-`buffer_env.py`'s module docstring for why: building that pydantic object graph, not just the
-subprocess/JSON transport `env.py` already addresses, was the measured bottleneck in Vakuu's
-whispering_earring self-play facility (its branch workers / Claws's MCTS search specifically -- the main
-self-play line still uses `env.py`/`Sts2Session`, since it never touches `combat_play` directly).
+via `buffer_layout.py`'s accessor functions) instead of a JSON-decoded pydantic `Decision`.
 
-## Fixed bugs (history, for anyone diffing against an older copy of this doc)
-
-`HistoryCounts` used to `return` before advancing its `ref int offset` when passed a `null` creature,
-instead of writing padding like every other encoder here. Combined with the old per-`DecisionType`
-variable-width layout, that meant `CombatPlay` records silently shifted every field after the per-enemy
-history-counts loop whenever fewer than `MaxEnemies=5` enemies were alive — i.e. almost always. Fixed by
-making `HistoryCounts` write `-1,-1` padding per counter for a `null` creature, same as `Card`/`Relic`/
-`Potion`/`MapPoint`. Combined with the move to fixed section offsets (this doc), a `CombatPlay` record's
-layout no longer depends on how many enemies happen to be alive.

@@ -37,9 +37,7 @@ def _load_token_map() -> dict[int, str]:
 def decode_token(token: int) -> str | None:
     """token -> the raw game entry id (e.g. 5 -> "STRIKE"), or None for UnknownToken (0) / an
     empty-slot sentinel (-1) / an unrecognized token. Builds on ExportTokenMap's "CATEGORY:ID"
-    strings (see Tokenizer.cs) -- category is discarded here since every caller already knows
-    which category a given buffer field holds (a card slot's token is always a card id, etc.), so
-    there's nothing to disambiguate."""
+    strings."""
     if token <= 0:
         return None
     key = _load_token_map().get(token)
@@ -49,19 +47,9 @@ def decode_token(token: int) -> str | None:
     return entry
 
 
-# --- full decode, for debugging only ------------------------------------------------------------
-# Rebuilds exactly the per-decision object graph buffer_layout.py's own docstring says the buffer
-# protocol exists to avoid paying for -- never call decode_buffer()/BufferDecision.to_dict() from
-# inside a training loop's step. It's here so a human (or a print/log statement) can look at a
-# captured BufferDecision the same way they'd read a JSON `Decision`, without hand-rolling offset
-# math at a debugger prompt. Every value returned is a plain Python int/float/str/bool/None/list/
-# dict/tuple (never a numpy scalar), so the result round-trips through json.dumps for logging.
-
-
 def _decode_card(slot: np.ndarray) -> dict | None:
     """slot is a raw CARD_SIZE block, or the first CARD_SIZE floats of a longer row (a hand/pile/
-    shop/etc. slot) -- callers already sliced to slot[:bl.CARD_SIZE] before calling this. None for
-    an empty/padding slot (card_token == 0)."""
+    shop/etc. slot) """
     if bl.card_token(slot) == 0:
         return None
     enchant_tok = int(slot[bl.CARD_ENCHANT_TOKEN])
@@ -276,13 +264,7 @@ _SECTION_DECODERS = {
 
 def decode_buffer(arr: np.ndarray) -> dict:
     """Full human-readable decode of one raw buffer record: every tokenized id resolved to its
-    game entry string (via decode_token), every section as plain dicts/lists -- close enough to
-    the JSON protocol's own shape to eyeball the two against each other. Debugging/logging only --
-    see this section's module-level comment for why. `player`/`run_context` are always present
-    (they're always-fresh sections); the key named after the current `decision` holds whichever
-    section is actually live right now (e.g. arr's DecisionType == combat_play -> a "combat_play"
-    key), matching BufferStateWriter's own refresh-only-what's-relevant semantics -- a stale
-    section from an earlier decision is never decoded even though the raw buffer still holds it."""
+    game entry string (via decode_token). Debugging/logging only """
     decision = bl.decision_name(arr)
     out: dict = {
         "decision": decision,
@@ -337,11 +319,12 @@ class _ClrWorker:
     stuck call (see _call's docstring) without repeating this bookkeeping. Amortizes thread-spawn
     cost across every call made through one worker (measured ~2.4x cheaper per call than spawning
     a fresh thread per call, since a hot branch-worker loop calls .Action() once per turn action)
-    -- the request/response queue handoff is the only per-call cost once the thread is up."""
+    """
 
     def __init__(self) -> None:
         self._requests: queue.Queue = queue.Queue()
-        threading.Thread(target=self._loop, daemon=True, name="sts2-clr-call").start()
+        self.thread = threading.Thread(target=self._loop, daemon=True, name="sts2-clr-call")
+        self.thread.start()
 
     def _loop(self) -> None:
         while True:
@@ -358,11 +341,6 @@ class _ClrWorker:
                 response.put(("error", e))
 
     def call(self, fn, *args, timeout: float):
-        """Raises queue.Empty (not caught here) if `fn` doesn't respond within `timeout` --
-        Sts2BufferSession._call is what turns that into Sts2EngineTimeoutError and decides what
-        to do with this now-presumed-stuck worker. Never confusable with a genuine TimeoutError
-        `fn` itself might raise: that arrives as ("error", e) and gets re-raised as `e` below, a
-        distinct code path from the queue.Empty this raises on its own."""
         response: queue.Queue = queue.Queue(maxsize=1)
         self._requests.put((fn, args, response))
         kind, value = response.get(timeout=timeout)
@@ -371,15 +349,34 @@ class _ClrWorker:
         return value
 
     def stop(self) -> None:
-        # Non-blocking by construction (Queue.put doesn't wait for the item to be consumed): if
-        # the loop is mid-call (stuck), it never sees this sentinel, and that's fine -- it's a
-        # daemon thread either way, abandoned at process exit regardless of whether it ever loops
-        # back around to read it.
         self._requests.put(None)
+
+_abandoned_workers: list[threading.Thread] = []
+_abandoned_lock = threading.Lock()
+
+
+def _reap_abandoned_workers() -> None:
+    """Raises Sts2EngineTimeoutError if any _ClrWorker thread ever abandoned (by a timeout) in
+    this process is still running; otherwise clears out whichever ones have since finished and
+    returns normally.  """
+    with _abandoned_lock:
+        pending = list(_abandoned_workers)
+    still_running = [t for t in pending if t.is_alive()]
+    if still_running:
+        raise Sts2EngineTimeoutError(
+            f"{len(still_running)} abandoned engine call(s) from an earlier timeout in this "
+            "process are still running -- refusing to make a new native call while they could "
+            "still race it (see _reap_abandoned_workers's docstring)"
+        )
+    with _abandoned_lock:
+        for t in pending:
+            if t in _abandoned_workers:
+                _abandoned_workers.remove(t)
 
 
 class Sts2BufferSession:
     def __init__(self, logger=None, timeout: float = _DEFAULT_ENGINE_TIMEOUT):
+        _reap_abandoned_workers()
         self._session = load_clr().BufferSession()
         actual_size = int(self._session.BufferSize)
         assert actual_size == bl.TOTAL_SIZE, (
@@ -398,20 +395,13 @@ class Sts2BufferSession:
     def _call(self, fn, *args):
         """Runs one blocking CLR call (RunSimulator, in-process via pythonnet) through this
         session's persistent _ClrWorker and bounds how long this method waits for it to return.
-        Unlike Sts2Session's subprocess call, there's no cooperative cancellation point inside a
-        native CLR call and no separate process to kill on timeout -- so on timeout the call keeps
-        running forever on the worker's thread regardless of what this method does. What this
-        still buys: the CALLER gets Sts2EngineTimeoutError back instead of hanging forever itself
-        (letting branch_worker_loop/main_worker_loop report an error and move on) rather than
-        wedging the whole worker with no recovery, which is what happened before this existed (see
-        Sts2EngineTimeoutError's docstring). A fresh _ClrWorker replaces the stuck one so the NEXT
-        call on this session gets a clean thread instead of queuing forever behind a permanently
-        stuck one -- the abandoned worker (and whatever native state its stuck call left behind)
-        is still leaked for the rest of this process's life, same tradeoff _ClrWorker's own
-        docstring describes, just amortized across every call instead of paid on every one."""
+        """
+        _reap_abandoned_workers()
         try:
             return self._worker.call(fn, *args, timeout=self.timeout)
         except queue.Empty:
+            with _abandoned_lock:
+                _abandoned_workers.append(self._worker.thread)
             self._worker = _ClrWorker()
             raise Sts2EngineTimeoutError(
                 f"BufferSession call didn't respond within {self.timeout}s -- treating it (and "
@@ -428,11 +418,7 @@ class Sts2BufferSession:
 
     def open_from_checkpoint(self, character: str, seed: str, ascension: int,
                               actions: list[dict]) -> BufferDecision:
-        """Same replay-to-reconstruct-state approach as Sts2Session.open_from_checkpoint -- see
-        its docstring. Intermediate replayed decisions are only ever wrapped far enough to check
-        for DecisionType.Error (a single cheap fixed-size numpy copy, not the accessor use a real
-        caller would do) -- the caller otherwise only inspects the *final* decision reached, same
-        as the JSON path's own `decision` local being overwritten every loop iteration."""
+        """Same replay-to-reconstruct-state approach as Sts2Session.open_from_checkpoint """
         self.character, self.seed, self.ascension = character, seed, ascension
         raw = self._call(self._session.StartRun, character, seed, ascension)
         for entry in actions:
@@ -450,19 +436,7 @@ class Sts2BufferSession:
     def load_and_resume_combat(self, checkpoint_path: str, entry_action: dict,
                                 actions: list[dict]) -> BufferDecision:
         """Faster alternative to open_from_checkpoint for reconstructing a state inside a
-        combat: load_save(checkpoint_path) resumes from a native checkpoint taken just before
-        the room-entry action that started this combat, instead of replaying the whole run from
-        StartRun -- see facility.py's main_worker_loop for where that checkpoint is taken and
-        why it must be pre-entry (the checkpoint's mid-combat rollback restores map/room
-        metadata but not RNG stream position, and encounter selection consumes RNG at room-entry
-        time -- a checkpoint taken after entry would reload to a *different* encounter on
-        replay). entry_action re-enters the same room/encounter; actions are the in-combat
-        actions already taken this combat, bringing the session up to the branch point. Same
-        silent-replay contract as open_from_checkpoint: no logger calls for these already-known
-        actions. action_log ends up as [entry_action, *actions] -- this session has no memory of
-        anything before the checkpoint, so a caller that needs the full history for output
-        (facility.py's branch_worker_loop) is responsible for prepending its own pre-combat
-        prefix onto action_log afterward."""
+        combat"""
         self.load_save(checkpoint_path)
         combined = [entry_action, *actions]
         decision = None
@@ -484,27 +458,18 @@ class Sts2BufferSession:
         raw = self._call(self._session.Action, action_name, json.dumps(args) if args else None)
         decision = self._decision(raw)
         if decision.decision == "error":
-            # A failed action leaves BufferSession's native buffer completely untouched (no
-            # DetectDecisionPoint() call happens on that path) -- see ExecuteActionToBuffer's
-            # docstring. Raising here, same as Sts2Session._to_decision does for the JSON
-            # protocol, is what makes that failure visible at all instead of silently no-op'ing
-            # while action_log still records the action as if it had succeeded.
             raise Sts2ActionError(self._session.LastError or "unknown error")
         if self.logger:
             self.logger.log_state(decision)
         return decision
 
     def randomize_draw_pile(self, state: BufferDecision, seed: int | None = None) -> None:
-        """See RunSimulator.RandomizeDrawPile -- an int-seeded in-place shuffle instead of the
-        JSON protocol's card-id-list set_draw_order (no ids to round-trip in-process)."""
         if getattr(state, "decision", None) != "combat_play":
             return
         self._call(self._session.RandomizeDrawPile, seed if seed is not None else 0)
 
     def save(self, path: str) -> dict:
-        """Write a native sts2 checkpoint at `path` -- same RunSimulator.SaveCheckpoint call
-        Sts2Session.save() makes over the JSON protocol (see env.py), just in-process via
-        BufferSession.Save. Raises Sts2ActionError if there's no active run or the write fails."""
+        """Write a native sts2 checkpoint at `path`."""
         result = json.loads(self._call(self._session.Save, path))
         if not result.get("success"):
             raise Sts2ActionError(result.get("message", "save failed"))
@@ -512,12 +477,7 @@ class Sts2BufferSession:
 
     def load_save(self, path: str) -> BufferDecision:
         """Load a native checkpoint written by save() and resume into it -- counterpart to
-        save(), and the in-process equivalent of Sts2Session.load_save(). No character/seed/
-        ascension or prior action log needed (unlike open_from_checkpoint): the checkpoint
-        carries its own state/RNG. action_log is reset to empty -- same reasoning as
-        Sts2Session.load_save(). Raises FileNotFoundError if `path` doesn't exist (a caller bug,
-        not a decision to branch on -- see BufferSession.LoadSave's docstring) and
-        Sts2ActionError if the engine-side load fails (missing run, bad schema, corrupt save)."""
+        save(), and the in-process equivalent of Sts2Session.load_save()."""
         self.action_log = []
         arr = self._call(self._session.LoadSave, path)
         decision = self._decision(arr)
@@ -526,8 +486,4 @@ class Sts2BufferSession:
         return decision
 
     def close(self) -> None:
-        # No subprocess to tear down -- the C# side is GC'd with this object. stop() is a
-        # best-effort, non-blocking ask for the worker thread to exit its loop -- if it's mid-call
-        # (stuck), it never gets the message and stays leaked, same as any other stuck-call
-        # aftermath (see _ClrWorker.stop()'s own comment).
         self._worker.stop()

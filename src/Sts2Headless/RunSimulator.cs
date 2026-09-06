@@ -1897,6 +1897,48 @@ public partial class RunSimulator
             _rewardChoice = -1;
             _rewardWait?.Set();
         }
+
+        // Bisected root cause of a stale-HasPendingReward race (confirmed via live reproduction:
+        // a fresh StartRun after replaying a run through this same RunSimulator instance without
+        // resolving its final pending decision misreported the new run's own first decision).
+        // _cardSelector is one instance reused for this RunSimulator's whole lifetime
+        // (RunSimulator.cs's `private readonly HeadlessCardSelector _cardSelector = new();`), but
+        // CleanUp() -- which BufferSession.cs's own docstring says StartRun/LoadSave rely on to
+        // "fully reinitialize" before a fresh run -- never touched this selector's fields. If the
+        // PREVIOUS run in this process left a card_reward/card_select decision genuinely pending
+        // (e.g. a branch worker's replay stops one action short of resolving it, by design --
+        // see MetaOptionJob's prefix), that reward/selection's own GetSelectedCardReward/
+        // GetSelectedCards call is still blocked on a background thread waiting on _rewardWait/
+        // _pendingTcs, and HasPendingReward/HasPending stay true on THIS instance until Reset()
+        // (or a real ResolveReward/ResolvePending call) clears them -- so the NEXT run's own
+        // DetectDecisionPoint() sees a stale pending decision from a run it never played and
+        // reports the wrong decision entirely (reproduced: a fresh StartRun after such a replay
+        // returned "card_reward" instead of the new seed's real first decision).
+        //
+        // This only clears the FIELDS, not the old background thread itself -- that thread holds
+        // its own local reference to the old _rewardWait/_pendingTcs object, so it keeps blocking
+        // (up to GetSelectedCardReward's 5-minute timeout) against an abandoned RunState/
+        // CardModel set that nothing reads anymore, same "orphaned straggler" class of harmless
+        // leak DrainPendingBackgroundOp's docstring already accepts elsewhere. Replacing (not
+        // reusing) _rewardWait/_pendingTcs objects is what keeps a later ResolveReward/
+        // ResolvePending call for the NEW run from being able to reach the OLD thread's wait
+        // handle even if that thread is still alive when the new one is created.
+        public void Reset()
+        {
+            PendingOptions = null;
+            PendingMinSelect = 0;
+            PendingMaxSelect = 0;
+            PendingPrompt = "";
+            PendingSourceCategory = null;
+            PendingSourceId = null;
+            PendingPromptTable = null;
+            PendingPromptKey = null;
+            _pendingTcs = null;
+
+            PendingRewardCards = null;
+            _rewardWait = null;
+            _rewardChoice = -1;
+        }
     }
 
     /// <summary>
@@ -2351,6 +2393,25 @@ public partial class RunSimulator
         {
             Log($"CleanUp exception: {ex.Message}");
         }
+        // Must run even if the try above threw -- these stale-pending fields are what's actually
+        // responsible for a fresh StartRun/LoadSave misreporting its first decision as whatever
+        // the PREVIOUS run in this process left unresolved (see HeadlessCardSelector.Reset()'s
+        // docstring for _cardSelector's own case) -- a RunManager cleanup failure shouldn't also
+        // block this from happening.
+        _cardSelector.Reset();
+        // Root cause of the reproduced bug specifically: DetectDecisionPointCore checks
+        // _pendingCardReward (normal post-combat reward, distinct from _cardSelector's
+        // event-triggered one) BEFORE looking at _runState.CurrentRoom at all -- a branch worker
+        // that replays a card_reward group's prefix (by design, stopping one action short of
+        // resolving it -- see MetaOptionJob's prefix) leaves this field set, and it survived every
+        // previous StartRun/LoadSave on this same RunSimulator instance untouched. The next run
+        // then sees a leftover reward from a combat it never played instead of its own real first
+        // decision (confirmed: reproduced as a fresh run reporting "card_reward" instead of
+        // "event_choice"). _pendingBundles/_pendingBundleTcs (Scroll Box bundle-pick) are the same
+        // shape of gap -- reset alongside it rather than waiting for a separate repro.
+        _pendingCardReward = null;
+        _pendingBundles = null;
+        _pendingBundleTcs = null;
     }
 
     #endregion
