@@ -341,8 +341,6 @@ public partial class RunSimulator
             try
             {
                 var rewardsSet = new RewardsSet(player).WithRewardsFromRoom(combatRoom);
-                // build 23372702: GenerateWithoutOffering() now returns Task (void);
-                // generated rewards live on rewardsSet.Rewards afterwards.
                 rewardsSet.GenerateWithoutOffering().GetAwaiter().GetResult();
                 var rewards = rewardsSet.Rewards;
                 _syncCtx.Pump();

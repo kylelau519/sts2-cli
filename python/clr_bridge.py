@@ -31,19 +31,43 @@ def silence_stderr():
         os.close(saved_fd)
 
 
+@contextlib.contextmanager
+def silence_stdout_and_stderr():
+    """Like silence_stderr(), but also redirects OS-level fd 1 (stdout). Sentry.Godot's
+    [ModuleInitializer] fires the first time Sts2Headless.dll is loaded into a process and prints
+    "SentryGodotInitializer: Sentry GDExtension not loaded ..." to stdout (not stderr), once per
+    worker process -- with many self-play workers this floods the terminal, so both fds are
+    silenced for the duration of the CLR load."""
+    stdout_fd = sys.stdout.fileno()
+    stderr_fd = sys.stderr.fileno()
+    saved_stdout_fd = os.dup(stdout_fd)
+    saved_stderr_fd = os.dup(stderr_fd)
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull_fd, stdout_fd)
+        os.dup2(devnull_fd, stderr_fd)
+        yield
+    finally:
+        os.dup2(saved_stdout_fd, stdout_fd)
+        os.dup2(saved_stderr_fd, stderr_fd)
+        os.close(devnull_fd)
+        os.close(saved_stdout_fd)
+        os.close(saved_stderr_fd)
+
+
 _sts2headless = None  # cached: clr.AddReference + import only needs to happen once per process
 
 
 def load_clr():
     """Loads the Sts2Headless assembly into this process's CoreCLR and returns the imported
     `Sts2Headless` CLR module (its public classes -- GymEnv, BufferSession -- are attributes of
-    this module). Wrapped in silence_stderr() since the CLR's first Console.Error touch happens
-    during this call."""
+    this module). Wrapped in silence_stdout_and_stderr() since the CLR's first Console.Error touch,
+    and Sentry.Godot's module-initializer print to stdout, both happen during this call."""
     global _sts2headless
     if _sts2headless is not None:
         return _sts2headless
 
-    with silence_stderr():
+    with silence_stdout_and_stderr():
         from clr_loader import get_coreclr
         from pythonnet import set_runtime
 
