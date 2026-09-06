@@ -1,0 +1,11 @@
+# Runtime deps for python/ (the protocol client) and the CLR bridge to Sts2Headless.dll.
+# Requires the .NET 9+ SDK/runtime to be installed separately (see README's Setup section) --
+# pythonnet/clr_loader talk to CoreCLR, they don't bundle a runtime.
+pythonnet==3.1.0
+clr_loader==0.3.1
+pydantic==2.13.4
+rich==15.0.0
+numpy==2.4.3
+
+# tests/
+pytest==9.0.3
