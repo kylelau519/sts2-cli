@@ -300,6 +300,58 @@ class BufferDecision:
     @property
     def victory(self) -> bool:
         return bl.victory(self.arr) if self.decision == "game_over" else False
+    
+    @property
+    def floor(self) -> int:
+        return bl.run_context(self.arr)["floor"]
+    
+    @property
+    def act(self) -> int:
+        return bl.run_context(self.arr)["act_index"]
+
+    def is_last_of_act(self) -> bool:
+        """Check if current location is at the last map node (highest row before boss at -1)."""
+        current_row = None
+        max_row = -1
+
+        for row, _, slot in bl.map_points(self.arr):
+            if row == -1:  # boss point
+                continue
+            point_type = int(slot[0])
+            if point_type != -1:  # valid map point
+                if int(slot[2]):  # current flag
+                    current_row = row
+                max_row = max(max_row, row)
+
+        return current_row is not None and current_row == max_row
+
+    def get_enemies_alive_mask(self) -> np.ndarray:
+        """5-element bool array: True if enemy at index i is alive, False if dead."""
+        return np.array([bl.enemy_token(bl.enemy_slot(self.arr, i)) != -1 for i in range(bl.MAX_ENEMIES)])
+
+    def get_enemies_hp(self) -> np.ndarray:
+        """Current HP for all 5 enemies (use alive_mask to filter)."""
+        return np.array([bl.enemy_hp(bl.enemy_slot(self.arr, i)) for i in range(bl.MAX_ENEMIES)])
+
+    def get_enemies_max_hp(self) -> np.ndarray:
+        """Max HP for all 5 enemies (use alive_mask to filter)."""
+        return np.array([bl.enemy_max_hp(bl.enemy_slot(self.arr, i)) for i in range(bl.MAX_ENEMIES)])
+
+    def get_enemies_block(self) -> np.ndarray:
+        """Current block for all 5 enemies (use alive_mask to filter)."""
+        return np.array([bl.enemy_block(bl.enemy_slot(self.arr, i)) for i in range(bl.MAX_ENEMIES)])
+
+    def get_enemies_token(self) -> np.ndarray:
+        """Token (ID) for all 5 enemies (use alive_mask to filter)."""
+        return np.array([bl.enemy_token(bl.enemy_slot(self.arr, i)) for i in range(bl.MAX_ENEMIES)])
+
+    def get_enemies_intends_attack(self) -> np.ndarray:
+        """Attack intent for all 5 enemies (use alive_mask to filter)."""
+        return np.array([bl.enemy_intends_attack(bl.enemy_slot(self.arr, i)) for i in range(bl.MAX_ENEMIES)])
+    
+    def get_enemies_ids(self) -> np.ndarray[str]:
+        enemies_token = np.array([bl.enemy_token(bl.enemy_slot(self.arr, i)) for i in range(bl.MAX_ENEMIES)])
+        return np.array([decode_token(tok) for tok in enemies_token])
 
     def to_dict(self) -> dict:
         """Full human-readable decode -- see decode_buffer()'s docstring. For debugging/logging
