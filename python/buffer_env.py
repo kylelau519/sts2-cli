@@ -474,8 +474,7 @@ class Sts2BufferSession:
         self.character, self.seed, self.ascension = character, seed, ascension
         raw = self._call(self._session.StartRun, character, seed, ascension)
         for entry in actions:
-            args = entry.get("args")
-            raw = self._call(self._session.Action, entry["action"], json.dumps(args) if args else None)
+            raw = self._replay_entry(entry)
             if self._decision(raw).decision == "error":
                 # See step()'s docstring -- a checkpoint's own prefix can itself contain an
                 # action that only ever silently no-op'd (recorded as if it succeeded) rather
@@ -493,12 +492,33 @@ class Sts2BufferSession:
         combined = [entry_action, *actions]
         decision = None
         for entry in combined:
-            args = entry.get("args")
-            raw = self._call(self._session.Action, entry["action"], json.dumps(args) if args else None)
-            decision = self._decision(raw)
+            decision = self._decision(self._replay_entry(entry))
             if decision.decision == "error":
                 raise Sts2ActionError(self._session.LastError or "unknown error")
         self.action_log = combined
+        return decision
+
+    def _replay_entry(self, entry: dict):
+        """Re-applies one action_log entry and returns the raw buffer. An entry is either a game
+        action or {"cmd": "set_hp", "hp": N} (see set_player_hp), which isn't an action but has to
+        replay at the same point or a reload lands in a different state."""
+        if entry.get("cmd") == "set_hp":
+            return self._call(self._session.SetPlayerHp, int(entry["hp"]))
+        args = entry.get("args")
+        return self._call(self._session.Action, entry["action"], json.dumps(args) if args else None)
+
+    def set_player_hp(self, hp: int) -> BufferDecision:
+        """Sets the player's current HP (clamped to [1, max HP], no game hooks) and returns the
+        current decision re-read with it. Recorded in action_log as a "set_hp" entry so open_from_
+        checkpoint / load_and_resume_combat reproduce it -- used to play a combat from full HP and
+        then restore the HP the run really had (Vakuu's MainlineJob)."""
+        entry = {"cmd": "set_hp", "hp": int(hp)}
+        decision = self._decision(self._replay_entry(entry))
+        if decision.decision == "error":
+            raise Sts2ActionError(self._session.LastError or "unknown error")
+        self.action_log.append(entry)
+        if self.logger:
+            self.logger.log_action(entry)  # keep the recorder's step index aligned with action_log
         return decision
 
     def step(self, action_name: str, **kwargs) -> BufferDecision:

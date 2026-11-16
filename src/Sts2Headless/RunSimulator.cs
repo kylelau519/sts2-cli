@@ -667,6 +667,18 @@ public partial class RunSimulator
             (drawList[i], drawList[j]) = (drawList[j], drawList[i]);
         }
     }
+    /// <summary>
+    /// Sets the player's current HP directly (clamped to [1, MaxHp]) with none of the game's HP-change
+    /// hooks. For callers that measure a combat from full HP and then restore the HP the run actually
+    /// had -- see Vakuu's MainlineJob. Not a game action: a replay must reapply it at the same point.
+    /// </summary>
+    public void SetPlayerHp(int hp)
+    {
+        var creature = _runState?.Players[0].Creature;
+        if (creature == null) return;
+        creature.SetCurrentHpInternal(Math.Max(1, hp));
+        _lastKnownHp = creature.CurrentHp;
+    }
     // Save/Load   → RunSimulator.SaveLoad.cs
     // Actions     → RunSimulator.Actions.cs
     // States      → RunSimulator.States.cs

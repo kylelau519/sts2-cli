@@ -101,6 +101,21 @@ public partial class RunSimulator
         return buffer;
     }
 
+    /// <summary>Sets the player's HP (SetPlayerHp) and re-reads the CURRENT decision point into the
+    /// buffer, so the caller sees the new HP -- the same redirect mechanism as ExecuteActionToBuffer,
+    /// just with no action in between.</summary>
+    public float[] SetPlayerHpToBuffer(int hp, float[]? buffer = null)
+    {
+        buffer ??= new float[BufferLayout.TotalSize];
+        SetPlayerHp(hp);
+        var previous = _bufferRedirect;
+        _bufferRedirect = new BufferStateWriter(this, buffer);
+        LastActionError = null;
+        try { DetectDecisionPoint(); }
+        finally { _bufferRedirect = previous; }
+        return buffer;
+    }
+
     /// <summary>Tags buffer[0] so a consumer can dispatch to the right fixed layout without any
     /// other bookkeeping.</summary>
     public enum DecisionType

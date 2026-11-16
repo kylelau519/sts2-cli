@@ -101,6 +101,10 @@ namespace Sts2Headless
 
         public void RandomizeDrawPile(int seed) => _sim.RandomizeDrawPile(seed);
 
+        /// <summary>Sets the player's current HP and returns the current decision re-read with it
+        /// (see RunSimulator.SetPlayerHpToBuffer).</summary>
+        public float[] SetPlayerHp(int hp) => _sim.SetPlayerHpToBuffer(hp, _buffer);
+
         /// <summary>Writes a native checkpoint via RunSimulator.SaveCheckpoint -- the same call
         /// Program.cs's "save"/"write_continue_save" JSON-protocol cases make, just in-process.
         /// Returns the result dict as a JSON string (matching ExportTokenMap's precedent of
